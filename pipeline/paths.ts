@@ -1,0 +1,67 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export const REELS_DIR = process.env.REEL_HOME ? path.resolve(process.env.REEL_HOME) : path.join(ROOT, 'reels');
+export const ASSETS = path.join(ROOT, 'assets');
+export const FONTS_DIR = path.join(ASSETS, 'fonts');
+export const SFX_DIR = path.join(ASSETS, 'sfx');
+/** whisper.cpp + models live outside the repo so re-cloning doesn't re-download 1.5 GB */
+export const TOOLS_DIR = process.env.REEL_TOOLS ? path.resolve(process.env.REEL_TOOLS) : path.join(os.homedir(), '.reel-maker');
+export const WHISPER_DIR = path.join(TOOLS_DIR, 'whisper.cpp');
+export const WHISPER_VERSION = process.env.REEL_WHISPER_VERSION || '1.7.6';
+
+export const AUDIO_EXT = ['.m4a', '.mp3', '.wav', '.aac', '.flac', '.ogg', '.aiff', '.aif', '.mp4', '.mov', '.caf'];
+export const IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif', '.tif', '.tiff', '.avif'];
+
+export type ReelPaths = ReturnType<typeof reelPaths>;
+
+export const reelPaths = (nameOrDir: string) => {
+  const dir = fs.existsSync(nameOrDir) && fs.statSync(nameOrDir).isDirectory()
+    ? path.resolve(nameOrDir)
+    : path.join(REELS_DIR, nameOrDir);
+  const build = path.join(dir, '.build');
+  const pub = path.join(build, 'public');
+  return {
+    name: path.basename(dir),
+    dir,
+    images: path.join(dir, 'images'),
+    script: path.join(dir, 'script.md'),
+    settings: path.join(dir, 'reel.json'),
+    build,
+    pub,
+    pubImages: path.join(pub, 'images'),
+    prep: path.join(build, 'prep.json'),
+    words: path.join(build, 'words.json'),
+    timeline: path.join(dir, 'timeline.json'),
+    out: path.join(dir, 'out'),
+  };
+};
+
+/** find `<base>.<audio ext>` in a reel folder */
+export const findAudio = (dir: string, base: string): string | null => {
+  for (const ext of AUDIO_EXT) {
+    const p = path.join(dir, base + ext);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+};
+
+export const listImages = (dir: string): string[] =>
+  fs.existsSync(dir)
+    ? fs
+        .readdirSync(dir)
+        .filter((f) => IMAGE_EXT.includes(path.extname(f).toLowerCase()) && !f.startsWith('.'))
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+        .map((f) => path.join(dir, f))
+    : [];
+
+export const ensureDir = (d: string) => fs.mkdirSync(d, { recursive: true });
+
+export const readJson = <T,>(p: string): T => JSON.parse(fs.readFileSync(p, 'utf8')) as T;
+export const writeJson = (p: string, data: unknown) => {
+  ensureDir(path.dirname(p));
+  fs.writeFileSync(p, JSON.stringify(data, null, 2) + '\n');
+};

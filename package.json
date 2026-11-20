@@ -1,0 +1,41 @@
+{
+  "name": "reel-maker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Rules-based Instagram reel generator: voice + images in, polished 1080x1920 reel out. Remotion + ffmpeg + whisper.cpp.",
+  "type": "module",
+  "bin": {
+    "reel": "./bin/reel.sh"
+  },
+  "scripts": {
+    "postinstall": "tsx pipeline/active.ts",
+    "reel": "tsx bin/reel.ts",
+    "studio": "./reel preview example",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@remotion/bundler": "^4.0.545",
+    "@remotion/captions": "^4.0.545",
+    "@remotion/cli": "^4.0.545",
+    "@remotion/fonts": "^4.0.545",
+    "@remotion/install-whisper-cpp": "^4.0.545",
+    "@remotion/renderer": "^4.0.545",
+    "@remotion/zod-types": "^4.0.545",
+    "commander": "^15.1.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "remotion": "^4.0.545",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}

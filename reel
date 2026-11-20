@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Run the reel CLI from anywhere: ./reel <command>   (setup.sh also links it as `reel`)
+SELF="$0"
+while [ -L "$SELF" ]; do
+  LINK="$(readlink "$SELF")"
+  case "$LINK" in /*) SELF="$LINK" ;; *) SELF="$(dirname "$SELF")/$LINK" ;; esac
+done
+DIR="$(cd "$(dirname "$SELF")" && pwd)"
+exec "$DIR/node_modules/.bin/tsx" "$DIR/bin/reel.ts" "$@"

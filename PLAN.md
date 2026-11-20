@@ -1,5 +1,13 @@
 # Reel Maker — Build Plan (v1)
 
+> **Status: v1 built.** See README.md for usage. Differences from this plan, decided during the build:
+> - Fonts are Montserrat (light, heavy, heavy italic), Playfair Display Italic and Instrument Serif Italic,
+>   picked to match the subtitle references.
+> - SFX are synthesised in TypeScript (filtered noise and sines) rather than with ffmpeg filters.
+> - Studio edits settings live. To keep them, copy the values into reel.json, because Studio can't save
+>   back to a reel folder.
+> - Captions leave before the next beat's transition starts, so text never sits on the wrong background.
+
 A local Mac tool. You give it **voice + images**. It produces a polished 1080×1920 Instagram reel with
 kinetic word-by-word captions, motion, transitions and SFX. No AI at render time: every decision comes
 from rules plus your settings, so the same inputs always give the same video.
