@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import { PRESETS } from '../shared/presets';
 import { settingsSchema, type Settings, type SettingsInput } from '../shared/schema';
 import { PROJECT_CONFIG, type ReelPaths } from './paths';
 
@@ -32,16 +31,10 @@ export const parseOverride = (kv: string): Obj => {
 
 /**
  * Resolution order (later wins):
- *   schema defaults ← preset ← reel.config.json (project) ← reels/<name>/reel.json ← CLI flags
+ *   schema defaults ← reel.config.json (project) ← reels/<name>/reel.json ← CLI flags
  */
-export const resolveSettings = (reelJson: SettingsInput = {}, overrides: Obj = {}, project: SettingsInput = {}): Settings => {
-  const presetName = (overrides.preset as string) ?? reelJson.preset ?? project.preset ?? 'anyash-light';
-  const preset = PRESETS[presetName];
-  if (!preset) throw new Error(`Unknown preset "${presetName}". Available: ${Object.keys(PRESETS).join(', ')}`);
-  const merged = deepMerge(deepMerge(deepMerge(preset as Obj, project as Obj), reelJson as Obj), overrides);
-  merged.preset = presetName;
-  return settingsSchema.parse(merged);
-};
+export const resolveSettings = (reelJson: SettingsInput = {}, overrides: Obj = {}, project: SettingsInput = {}): Settings =>
+  settingsSchema.parse(deepMerge(deepMerge(project as Obj, reelJson as Obj), overrides));
 
 const readJsonFile = (file: string): SettingsInput => {
   if (!fs.existsSync(file)) return {};

@@ -1,12 +1,21 @@
 import React from 'react';
-import { AbsoluteFill, random, staticFile, useCurrentFrame, useVideoConfig } from 'remotion';
+import { AbsoluteFill, random, staticFile, useCurrentFrame } from 'remotion';
 import type { Settings } from '../../shared/schema';
-import { rgba } from '../theme/palette';
 
 export const Vignette: React.FC<{ amount: number }> = ({ amount }) =>
   amount <= 0 ? null : (
     <AbsoluteFill
       style={{ background: `radial-gradient(ellipse 80% 70% at 50% 48%, rgba(0,0,0,0) 55%, rgba(0,0,0,${0.75 * amount}) 100%)` }}
+    />
+  );
+
+/** soft dark band behind the captions so white text reads on bright images */
+export const Scrim: React.FC<{ amount: number; y: number }> = ({ amount, y }) =>
+  amount <= 0 ? null : (
+    <AbsoluteFill
+      style={{
+        background: `linear-gradient(180deg, rgba(0,0,0,0) ${Math.max(0, y * 100 - 22)}%, rgba(0,0,0,${0.55 * amount}) ${y * 100}%, rgba(0,0,0,${0.3 * amount}) ${Math.min(100, y * 100 + 20)}%, rgba(0,0,0,${0.15 * amount}) 100%)`,
+      }}
     />
   );
 
@@ -28,24 +37,7 @@ export const Grain: React.FC<{ amount: number }> = ({ amount }) => {
   );
 };
 
-export const ProgressBar: React.FC<{ settings: Settings }> = ({ settings: s }) => {
-  const frame = useCurrentFrame();
-  const { durationInFrames } = useVideoConfig();
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        left: 0,
-        top: 0,
-        height: 8,
-        width: `${(frame / Math.max(1, durationInFrames - 1)) * 100}%`,
-        background: s.colors.accent,
-      }}
-    />
-  );
-};
-
-export const BrandLine: React.FC<{ settings: Settings; onLight: boolean }> = ({ settings: s, onLight }) =>
+export const BrandLine: React.FC<{ settings: Settings }> = ({ settings: s }) =>
   s.look.brandLine ? (
     <div
       style={{
@@ -59,8 +51,8 @@ export const BrandLine: React.FC<{ settings: Settings; onLight: boolean }> = ({ 
         fontSize: 30,
         letterSpacing: '0.14em',
         textTransform: 'uppercase',
-        color: onLight ? rgba(s.colors.ink, 0.7) : rgba('#FFFFFF', 0.82),
-        textShadow: onLight ? 'none' : '0 2px 10px rgba(0,0,0,0.5)',
+        color: 'rgba(255,255,255,0.85)',
+        textShadow: '0 2px 10px rgba(0,0,0,0.5)',
       }}
     >
       {s.look.brandLine}

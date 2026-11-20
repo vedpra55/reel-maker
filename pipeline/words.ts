@@ -86,6 +86,18 @@ export const mapTime = (t: number, map: CutMap): number => {
   return offset;
 };
 
+/** time in the tightened file → original time (inverse of mapTime) */
+export const unmapTime = (t: number, map: CutMap): number => {
+  let offset = 0;
+  for (const [a, b] of map.keep) {
+    const len = b - a;
+    if (t <= offset + len) return a + (t - offset);
+    offset += len;
+  }
+  const last = map.keep[map.keep.length - 1];
+  return last ? last[1] + (t - offset) : t;
+};
+
 export const applyCutMap = (words: RawWord[], map: CutMap): RawWord[] =>
   words.map((w) => ({ ...w, startMs: Math.round(mapTime(w.startMs, map)), endMs: Math.round(mapTime(w.endMs, map)) }));
 

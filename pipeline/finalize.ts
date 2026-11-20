@@ -36,17 +36,14 @@ export const contactSheet = async (p: ReelPaths, video: string, timeline: Timeli
   const dir = path.join(p.build, 'sheet');
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
-  const beats = timeline.beats;
-  for (const [i, b] of beats.entries()) {
-    // sample once the beat's first caption is fully on screen (not mid-transition or mid-exit)
-    const page = timeline.pages.find((pg) => pg.startMs >= b.startMs - 1 && pg.startMs < b.endMs);
-    const lastWord = page?.words[page.words.length - 1];
-    const ms = page && lastWord ? Math.min(page.endMs - 250, lastWord.startMs + 300, b.endMs - 350) : (b.startMs + b.endMs) / 2;
-    const t = (Math.max(b.startMs + 300, ms) / 1000).toFixed(3);
+  const shots = timeline.shots;
+  for (const [i, sh] of shots.entries()) {
+    // middle of the shot, clear of the transitions
+    const t = ((sh.startMs + sh.endMs) / 2 / 1000).toFixed(3);
     await ffmpeg(['-ss', t, '-i', video, '-frames:v', '1', '-vf', 'scale=216:384', '-q:v', '3', path.join(dir, `${String(i).padStart(3, '0')}.jpg`)]);
   }
-  const cols = Math.min(5, beats.length);
-  const rows = Math.ceil(beats.length / cols);
+  const cols = Math.min(5, shots.length);
+  const rows = Math.ceil(shots.length / cols);
   const sheet = path.join(p.out, 'contact-sheet.jpg');
   await ffmpeg([
     '-framerate', '1', '-i', path.join(dir, '%03d.jpg'),
@@ -59,25 +56,23 @@ export const writeReport = (
   p: ReelPaths,
   data: { plan: PlanReport | null; timeline: Timeline; sizeMB?: number; renderS?: number; settings: Settings },
 ) => {
-  const { plan, timeline: tl } = data;
+  const { plan, timeline: tl, settings: st } = data;
   const lines = [
     `reel: ${p.name}`,
-    `duration: ${(tl.durationMs / 1000).toFixed(1)}s   beats: ${tl.beats.length}   caption pages: ${tl.pages.length}   sfx: ${tl.sfx.length}`,
-    `preset: ${data.settings.preset}   intensity: ${data.settings.intensity}   seed: ${data.settings.seed}`,
+    `duration: ${(tl.durationMs / 1000).toFixed(1)}s   images: ${tl.shots.length}   words: ${tl.words.length}   captions: ${st.captions.mode}`,
   ];
   if (plan) {
-    lines.push(`beats by kind: ${Object.entries(plan.beats).map(([k, v]) => `${k} ${v}`).join(', ')}`);
-    lines.push(`stacked pages: ${plan.stackPages}/${plan.pages}`);
-    if (plan.alignScore !== null) lines.push(`script alignment: ${(plan.alignScore * 100).toFixed(0)}%`);
-    if (plan.unmatched.length) lines.push(`spoken but not in script: ${plan.unmatched.join(' ')}`);
+    if (plan.auto) lines.push('script.md had no image lines – images were spread automatically');
+    if (plan.unusedImages.length) lines.push(`not used: ${plan.unusedImages.join(', ')}`);
     for (const w of plan.warnings) lines.push(`warning: ${w}`);
   }
   if (data.sizeMB !== undefined) lines.push(`file: ${data.sizeMB.toFixed(1)} MB`);
   if (data.renderS !== undefined) lines.push(`render time: ${data.renderS.toFixed(0)}s`);
-  lines.push('', 'beats:');
-  for (const b of tl.beats) {
-    const what = b.image ? `${b.image.src} (${b.image.motion}${b.image.punch > 1 ? ', punch-in' : ''})` : b.stat ? `stat ${b.stat.raw} on ${b.bg}` : (b.bg ?? '');
-    lines.push(`  ${(b.startMs / 1000).toFixed(2).padStart(6)}s  ${b.kind.padEnd(6)} ${b.transition.padEnd(10)} ${what}`);
+  lines.push('', 'shots (times in the finished reel):');
+  for (const sh of tl.shots) {
+    lines.push(
+      `  ${(sh.startMs / 1000).toFixed(2).padStart(6)}s – ${(sh.endMs / 1000).toFixed(2).padStart(6)}s  ${path.basename(sh.src).padEnd(22)} ${sh.motion.padEnd(9)} in: ${sh.transition}`,
+    );
   }
   fs.mkdirSync(p.out, { recursive: true });
   fs.writeFileSync(path.join(p.out, 'report.txt'), lines.join('\n') + '\n');

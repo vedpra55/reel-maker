@@ -167,7 +167,7 @@ export const collectChecks = async (opts: { whisper: boolean }): Promise<Check[]
 
   // bundled assets
   const fonts = fs.existsSync(FONTS_DIR) ? fs.readdirSync(FONTS_DIR).filter((f) => f.endsWith('.woff2')) : [];
-  checks.push({ name: 'Bundled fonts', ok: fonts.length >= 8, detail: `${fonts.length} files in assets/fonts`, required: true });
+  checks.push({ name: 'Bundled fonts', ok: fonts.length >= 5, detail: `${fonts.length} files in assets/fonts`, required: true });
   const made = ensureSfx(SFX_DIR);
   checks.push({ name: 'Sound effects', ok: true, detail: made.length ? `generated ${made.join(', ')}` : 'ready (assets/sfx – swap in your own any time)', required: false });
 

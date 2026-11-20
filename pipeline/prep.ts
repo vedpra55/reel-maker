@@ -13,15 +13,17 @@ import { transcribeWords } from './transcribe';
 import { ffmpeg, probeImageSize, type Silence } from './util/ffmpeg';
 import { which } from './util/exec';
 import { log } from './util/log';
-import { applyCutMap, cleanWords, fixTimings, normaliseWords, snapToSilences, type RawWord } from './words';
+import { applyCutMap, cleanWords, fixTimings, mapTime, normaliseWords, snapToSilences, unmapTime, type CutMap, type RawWord } from './words';
 
 export type PrepWord = RawWord & { section: 'hook' | 'body' };
 
+/** where each recording sits in the master track, and what pause-tightening removed from it */
+export type PrepPiece = { name: 'hook' | 'voice'; offsetMs: number; durationMs: number; originalMs: number; cutMap: CutMap };
+
 export type Prep = {
-  version: 1;
+  version: 2;
   voice: { src: string; durationMs: number };
-  /** end of the hook audio in the master voice track (when hook.m4a exists) */
-  hookEndMs: number | null;
+  pieces: PrepPiece[];
   words: PrepWord[];
   silences: Silence[];
   images: { name: string; src: string; w: number; h: number }[];
@@ -83,7 +85,7 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
   log.step('Images');
   const images = await ingestImages(p);
   if (images.length) log.ok(`${images.length} image(s): ${images.map((i) => i.name).join(', ')}`);
-  else log.warn(`no images found in ${path.relative(process.cwd(), p.images)}/ – text beats only`);
+  else log.warn(`no images found in ${path.relative(process.cwd(), p.images)}/ (or the reel folder)`);
 
   log.step('Audio');
   const voiceSrc = findAudio(p.dir, 'voice');
@@ -103,8 +105,9 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
   const words: PrepWord[] = [];
   let offset = 0;
   let usedWhisper = false;
-  let hookEndMs: number | null = null;
+  const placed: PrepPiece[] = [];
   for (const pc of pieces) {
+    placed.push({ name: pc.name, offsetMs: offset, durationMs: pc.durationMs, originalMs: pc.originalMs, cutMap: pc.cutMap });
     const section = pc.name === 'hook' ? 'hook' : 'body';
     let raw = suppliedWords(p.dir, pc.name);
     if (raw) {
@@ -118,7 +121,6 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
       log.ok(`${pc.name}: ${raw.length} words`);
     }
     for (const w of raw) words.push({ ...w, startMs: w.startMs + offset, endMs: w.endMs + offset, section });
-    if (pc.name === 'hook') hookEndMs = pc.durationMs;
     offset += pc.durationMs + (pc.name === 'hook' ? s.audio.hookGapMs : 0);
   }
   fixTimings(snapToSilences(words, master.silences));
@@ -135,9 +137,9 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
   }
 
   const result: Prep = {
-    version: 1,
+    version: 2,
     voice: { src: 'voice.wav', durationMs: master.durationMs },
-    hookEndMs,
+    pieces: placed,
     words,
     silences: master.silences,
     images,
@@ -151,8 +153,21 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
   writeJson(p.prep, result);
 
   if (!fs.existsSync(p.script)) {
-    fs.writeFileSync(p.script, generateScript(words, images.map((i) => i.name), { hasHookAudio: !!hookSrc }));
-    log.ok(`wrote script.md from the transcript – edit it to place images and keywords`);
+    const last = words[words.length - 1]?.endMs ?? master.durationMs;
+    fs.writeFileSync(p.script, generateScript(words, images.map((i) => i.name), last, (ms) => toOriginal(ms, placed)));
+    log.ok(`wrote script.md – one line per image with its start time; edit the times and re-render`);
   }
   return result;
+};
+
+/** master-track time → (recording, time in the original file) */
+export const toOriginal = (finalMs: number, pieces: PrepPiece[]): { piece: 'hook' | 'voice'; ms: number } => {
+  const pc = [...pieces].reverse().find((x) => finalMs >= x.offsetMs) ?? pieces[0];
+  return { piece: pc.name, ms: Math.round(unmapTime(Math.max(0, finalMs - pc.offsetMs), pc.cutMap)) };
+};
+
+/** time in an original recording → master-track time */
+export const toFinal = (piece: 'hook' | 'voice', ms: number, pieces: PrepPiece[]): number | null => {
+  const pc = pieces.find((x) => x.name === piece);
+  return pc ? Math.round(pc.offsetMs + mapTime(ms, pc.cutMap)) : null;
 };

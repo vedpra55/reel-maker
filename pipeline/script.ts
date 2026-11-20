@@ -1,226 +1,160 @@
 /**
- * script.md parser and generator.
+ * script.md – which image shows when. One line per image:
  *
- *   # hook / # body       sections (hook maps to hook.m4a when present)
- *   *word*                force keyword          _words_   force italic-serif closer
- *   [img name opts]       cut to image on the next word (opts: split bw warm duo none focus=top motion=zoom-in)
- *   [text] [text dark]    text-only beat         [stat]    big number beat
- *   [end]                 end card starts here   |         force caption break
- *   <!-- comments -->     ignored
+ *     0:00    1st
+ *     0:03.5  2nd    zoom-out
+ *     0:07    3rd    push   focus=top
+ *     12.4    4th.png  bw
+ *
+ *   time     m:ss(.s) or seconds, read off your ORIGINAL voice file
+ *            (`hook 0:01.2 …` = a time inside hook.m4a). A range "0:03-0:07" also works; the end is
+ *            only used for the last image.
+ *   image    file name, with or without extension; a unique prefix is enough ("2nd", "02")
+ *   options  any order: a motion (zoom-in zoom-out pan-left pan-right pan-up pan-down drift tilt),
+ *            a transition into this image (cut crossfade push push-up zoom whip slide-up),
+ *            focus=top|bottom|left|right|center, bw | warm
+ *   Lines starting with #, // or <!-- are comments. "- " bullets are fine.
  */
-import { FOCI, MOTIONS, TREATMENTS, BACKGROUNDS } from '../shared/schema';
-import type { Background } from '../shared/schema';
-import { isSentenceEnd } from './util/text';
+import { FOCI, MOTIONS, TRANSITIONS, TREATMENTS, type Focus, type Motion, type Transition } from '../shared/schema';
 
-export type Section = 'hook' | 'body';
-
-export type Marker =
-  | {
-      kind: 'img';
-      image: string;
-      split: boolean;
-      treatment?: (typeof TREATMENTS)[number];
-      focus?: (typeof FOCI)[number];
-      motion?: (typeof MOTIONS)[number];
-    }
-  | { kind: 'text'; bg?: Background }
-  | { kind: 'stat' }
-  | { kind: 'end' };
-
-export type ScriptToken = {
-  text: string;
-  section: Section;
-  forceKey: boolean;
-  forceCloser: boolean;
-  breakBefore: boolean;
-  marker?: Marker;
+export type ImageLine = {
+  line: number;
+  piece: 'hook' | 'voice';
+  timeMs: number;
+  endMs?: number;
+  image: string;
+  motion?: Motion;
+  transition?: Transition;
+  focus?: Focus;
+  treatment?: (typeof TREATMENTS)[number];
 };
 
-export type ParsedScript = {
-  tokens: ScriptToken[];
-  /** markers after the last word (e.g. a trailing [end]) */
-  trailing: Marker[];
-  hasHookSection: boolean;
-  warnings: string[];
+export type ParsedScript = { lines: ImageLine[]; warnings: string[] };
+
+const TIME = /^\[?(\d+(?::\d{1,2}){0,2}(?:\.\d+)?)\]?$/;
+
+export const parseTime = (t: string): number | null => {
+  const m = t.match(TIME);
+  if (!m) return null;
+  const parts = m[1].split(':').map(Number);
+  if (parts.some((x) => !Number.isFinite(x))) return null;
+  const sec = parts.reduce((acc, x) => acc * 60 + x, 0);
+  return Math.round(sec * 1000);
 };
 
-export const parseMarker = (body: string, warnings: string[]): Marker | null => {
-  const parts = body.trim().split(/\s+/).filter(Boolean);
-  const kind = (parts.shift() ?? '').toLowerCase();
-  if (kind === 'img' || kind === 'image' || kind === 'split') {
-    const m: Extract<Marker, { kind: 'img' }> = { kind: 'img', image: '', split: kind === 'split' };
-    for (const p of parts) {
-      const [k, v] = p.includes('=') ? p.split('=') : [p, ''];
-      const lk = k.toLowerCase();
-      if (lk === 'split') m.split = true;
-      else if (v && lk === 'focus' && (FOCI as readonly string[]).includes(v)) m.focus = v as never;
-      else if (v && lk === 'motion' && (MOTIONS as readonly string[]).includes(v)) m.motion = v as never;
-      else if ((TREATMENTS as readonly string[]).includes(lk)) m.treatment = lk as never;
-      else if ((MOTIONS as readonly string[]).includes(lk)) m.motion = lk as never;
-      else if (!m.image) m.image = p;
-      else warnings.push(`unknown option "${p}" in [${body}]`);
-    }
-    if (!m.image) {
-      warnings.push(`[${body}] has no image name – ignored`);
-      return null;
-    }
-    return m;
-  }
-  if (kind === 'text') {
-    const bg = parts.find((p) => (BACKGROUNDS as readonly string[]).includes(p)) as Background | undefined;
-    return { kind: 'text', bg };
-  }
-  if (kind === 'stat') return { kind: 'stat' };
-  if (kind === 'end') return { kind: 'end' };
-  warnings.push(`unknown marker [${body}] – ignored`);
-  return null;
+const formatTime = (ms: number) => {
+  const s = ms / 1000;
+  const m = Math.floor(s / 60);
+  const rest = (s - m * 60).toFixed(1).padStart(4, '0');
+  return `${m}:${rest}`;
 };
+
+/** split a line into tokens, keeping "quoted names" together */
+const tokenize = (line: string) => [...line.matchAll(/"([^"]+)"|'([^']+)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]);
 
 export const parseScript = (src: string): ParsedScript => {
   const warnings: string[] = [];
-  const tokens: ScriptToken[] = [];
-  let section: Section = 'body';
-  let hasHookSection = false;
-  let pendingMarker: Marker | undefined;
-  let pendingBreak = false;
-  let inKey = false;
-  let inCloser = false;
-  const trailing: Marker[] = [];
-
-  const text = src.replace(/<!--[\s\S]*?-->/g, '');
-  for (const rawLine of text.split('\n')) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const h = line.match(/^#+\s*(\w+)/);
-    if (h) {
-      const name = h[1].toLowerCase();
-      if (name === 'hook') {
-        section = 'hook';
-        hasHookSection = true;
-      } else section = 'body';
-      inKey = inCloser = false;
-      continue;
+  const lines: ImageLine[] = [];
+  const text = src.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ''));
+  text.split('\n').forEach((raw, i) => {
+    let line = raw.trim().replace(/^[-*•]\s+/, '');
+    if (!line || line.startsWith('#') || line.startsWith('//')) return;
+    let tokens = tokenize(line);
+    let piece: ImageLine['piece'] = 'voice';
+    if (tokens[0]?.toLowerCase() === 'hook') {
+      piece = 'hook';
+      tokens = tokens.slice(1);
     }
-    // split into markers, breaks and words
-    const re = /\[([^\]]*)\]|\||[^\s[\]|]+/g;
-    for (const m of line.matchAll(re)) {
-      const chunk = m[0];
-      if (m[1] !== undefined) {
-        const mk = parseMarker(m[1], warnings);
-        if (mk) {
-          if (pendingMarker) warnings.push(`two markers in a row – [${m[1]}] replaces the previous one`);
-          pendingMarker = mk;
-        }
-        continue;
-      }
-      if (chunk === '|') {
-        pendingBreak = true;
-        continue;
-      }
-      let w = chunk;
-      let key = inKey;
-      let closer = inCloser;
-      // opening marks
-      while (/^[*_]/.test(w)) {
-        if (w[0] === '*') {
-          inKey = true;
-          key = true;
-        } else {
-          inCloser = true;
-          closer = true;
-        }
-        w = w.slice(1);
-      }
-      // closing marks (may be followed by punctuation: "weeks._" or "*92%*,")
-      const close = w.match(/^(.*?)([*_]+)([^\p{L}\p{N}]*)$/u);
-      if (close && close[1]) {
-        for (const ch of close[2]) {
-          if (ch === '*') inKey = false;
-          else inCloser = false;
-        }
-        w = close[1] + close[3];
-      }
-      if (!w) continue;
-      tokens.push({
-        text: w,
-        section,
-        forceKey: key,
-        forceCloser: closer,
-        breakBefore: pendingBreak,
-        marker: pendingMarker,
-      });
-      pendingMarker = undefined;
-      pendingBreak = false;
+    // time, "time-time", or "time - time"
+    let first = tokens.shift() ?? '';
+    let endTok: string | undefined;
+    const dash = first.match(/^(.+?)[-–](.+)$/);
+    if (dash && parseTime(dash[1]) !== null) {
+      first = dash[1];
+      endTok = dash[2];
+    } else if (tokens[0] === '-' || tokens[0] === '–') {
+      tokens.shift();
+      endTok = tokens.shift();
     }
-  }
-  if (pendingMarker) trailing.push(pendingMarker);
-  return { tokens, trailing, hasHookSection, warnings };
+    const timeMs = parseTime(first);
+    if (timeMs === null) {
+      warnings.push(`line ${i + 1}: "${raw.trim()}" – no time at the start, skipped`);
+      return;
+    }
+    const entry: ImageLine = { line: i + 1, piece, timeMs, image: '' };
+    if (endTok) {
+      const e = parseTime(endTok);
+      if (e !== null) entry.endMs = e;
+    }
+    // the first word after the time is always the image; the rest are options in any order
+    const [image, ...opts] = tokens;
+    entry.image = image ?? '';
+    const isIn = (list: readonly string[], v: string) => list.includes(v);
+    for (const tok of opts) {
+      const [k, v] = tok.includes('=') ? tok.split('=', 2) : ['', tok];
+      const key = k.toLowerCase();
+      const val = v.toLowerCase();
+      if ((key === 'focus' || !key) && isIn(FOCI, val)) entry.focus = val as Focus;
+      else if ((key === 'transition' || !key) && isIn(TRANSITIONS, val)) entry.transition = val as Transition;
+      else if ((key === 'motion' || !key) && isIn(MOTIONS, val)) entry.motion = val as Motion;
+      else if (!key && isIn(TREATMENTS, val)) entry.treatment = val as ImageLine['treatment'];
+      else warnings.push(`line ${i + 1}: unknown option "${tok}"`);
+    }
+    if (!entry.image) {
+      warnings.push(`line ${i + 1}: no image name after the time, skipped`);
+      return;
+    }
+    lines.push(entry);
+  });
+  return { lines, warnings };
 };
 
 /* ------------------------------------------------------------------ */
-/* Generator: transcript → editable script.md                          */
+/* Generator                                                           */
 /* ------------------------------------------------------------------ */
 
-type GenWord = { text: string; section: Section; startMs: number };
-
 /**
- * Writes one sentence per line and spreads the images over sentence starts in filename order,
- * so the generated file already renders well and you only edit what you want to change.
+ * First draft of script.md: images spread evenly over the voice, each cut moved to the nearest
+ * sentence (or word) start. Times are written in the ORIGINAL voice file's clock.
  */
-export const generateScript = (words: GenWord[], imageNames: string[], opts: { hasHookAudio: boolean }): string => {
-  const sentences: { section: Section; words: GenWord[] }[] = [];
-  let cur: GenWord[] = [];
-  let curSection: Section | null = null;
-  for (const w of words) {
-    if (curSection !== null && w.section !== curSection && cur.length) {
-      sentences.push({ section: curSection, words: cur });
-      cur = [];
-    }
-    curSection = w.section;
-    cur.push(w);
-    if (isSentenceEnd(w.text)) {
-      sentences.push({ section: w.section, words: cur });
-      cur = [];
-    }
-  }
-  if (cur.length && curSection) sentences.push({ section: curSection, words: cur });
-
-  // hook without a hook file = first sentence
-  if (!opts.hasHookAudio && sentences.length) sentences[0].section = 'hook';
-
-  const hook = sentences.filter((s) => s.section === 'hook');
-  const body = sentences.filter((s) => s.section === 'body');
-
-  // spread images: first one on the hook, the rest evenly over body sentences
-  const assign = new Map<number, string>();
-  const imgs = [...imageNames];
-  if (imgs.length && hook.length) assign.set(sentences.indexOf(hook[0]), imgs.shift()!);
-  if (imgs.length && body.length) {
-    const step = body.length / imgs.length;
-    imgs.forEach((name, i) => {
-      const idx = sentences.indexOf(body[Math.min(body.length - 1, Math.floor(i * step))]);
-      if (!assign.has(idx)) assign.set(idx, name);
-    });
-  }
-
-  const lines: string[] = [
-    '<!--',
-    '  Edit freely, then run: reel plan <name>   (or reel render <name>)',
-    '  *word* = keyword   _words_ = italic serif   | = caption break',
-    '  [img name] [img name split] [img name bw focus=top] [text] [text dark] [stat] [end]',
-    '  Images were spread automatically – move or change the [img …] markers as you like.',
-    '-->',
+export const generateScript = (
+  words: { text: string; startMs: number }[],
+  images: string[],
+  durationMs: number,
+  toOriginal: (finalMs: number) => { piece: 'hook' | 'voice'; ms: number },
+): string => {
+  const header = [
+    '# One line per image:  time  image  [options]',
+    '#   time    = where in your voice file the image appears (m:ss.s or seconds)',
+    '#   options = motion (zoom-in zoom-out pan-left pan-right pan-up pan-down drift tilt)',
+    '#             transition into it (cut crossfade push push-up zoom whip slide-up)',
+    '#             focus=top|bottom|left|right   bw | warm',
+    '# Edit the times, then: reel render <name>',
     '',
   ];
-  let lastSection: Section | null = null;
-  sentences.forEach((s, i) => {
-    if (s.section !== lastSection) {
-      if (lastSection) lines.push('');
-      lines.push(`# ${s.section}`);
-      lastSection = s.section;
-    }
-    const img = assign.get(i);
-    lines.push(`${img ? `[img ${img}] ` : ''}${s.words.map((w) => w.text).join(' ')}`);
+  if (!images.length) return header.join('\n') + '# (no images found – add some to images/)\n';
+  const out = spreadTimes(words, images.length, durationMs).map((t, i) => {
+    const o = toOriginal(t);
+    return `${o.piece === 'hook' ? 'hook ' : ''}${formatTime(o.ms).padEnd(8)} ${images[i]}`;
   });
-  return lines.join('\n') + '\n';
+  return header.concat(out).join('\n') + '\n';
+};
+
+/** n cut times spread evenly over the voice, each moved to a nearby sentence start (else word start) */
+export const spreadTimes = (words: { text: string; startMs: number }[], n: number, durationMs: number): number[] => {
+  const sentenceStarts = words.filter((_, i) => i === 0 || /[.!?…]["'”’)]*$/.test(words[i - 1].text)).map((w) => w.startMs);
+  const wordStarts = words.map((w) => w.startMs);
+  const used = new Set<number>([0]);
+  const times = [0];
+  for (let i = 1; i < n; i++) {
+    const ideal = (durationMs * i) / n;
+    const near = (arr: number[], within: number) =>
+      arr
+        .filter((x) => !used.has(x) && x > times[times.length - 1] && Math.abs(x - ideal) <= within)
+        .sort((a, b) => Math.abs(a - ideal) - Math.abs(b - ideal))[0];
+    const t = near(sentenceStarts, (durationMs / n) * 0.35) ?? near(wordStarts, 1500) ?? Math.round(ideal);
+    used.add(t);
+    times.push(t);
+  }
+  return times;
 };

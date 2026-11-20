@@ -16,7 +16,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { Command } from 'commander';
-import { PRESET_NAMES } from '../shared/presets';
 import { doctor } from '../pipeline/doctor';
 import { makeExample } from '../pipeline/example';
 import { finalize, writeReport } from '../pipeline/finalize';
@@ -28,14 +27,13 @@ import { preparePublic, renderReel, renderStills } from '../pipeline/render';
 import { loadSettings, parseOverride, deepMerge } from '../pipeline/settings';
 import { color, log } from '../pipeline/util/log';
 
-type Common = { preset?: string; set?: string[]; seed?: string; intensity?: string };
+type Common = { set?: string[]; seed?: string; captions?: string };
 
 const settingsFor = (p: ReelPaths, o: Common) => {
   let over: Record<string, unknown> = {};
   for (const kv of o.set ?? []) over = deepMerge(over, parseOverride(kv));
-  if (o.preset) over.preset = o.preset;
   if (o.seed !== undefined) over.seed = Number(o.seed);
-  if (o.intensity !== undefined) over.intensity = Number(o.intensity);
+  if (o.captions) over = deepMerge(over, { captions: { mode: o.captions } });
   return loadSettings(p, over);
 };
 
@@ -47,11 +45,8 @@ const existing = (name: string) => {
 
 const printPlan = (r: { report: PlanReport }) => {
   const rep = r.report;
-  log.ok(
-    `${rep.pages} caption pages (${rep.stackPages} stacked), beats: ${Object.entries(rep.beats).map(([k, v]) => `${v} ${k}`).join(', ')}`,
-  );
-  if (rep.alignScore !== null) log.ok(`script matches ${(rep.alignScore * 100).toFixed(0)}% of the spoken words`);
-  if (rep.unmatched.length) log.warn(`spoken but not in script.md: ${rep.unmatched.slice(0, 12).join(' ')}`);
+  log.ok(`${rep.shots} image shot(s)${rep.auto ? ' – spread automatically (script.md has no image lines)' : ' from script.md'}`);
+  if (rep.unusedImages.length) log.warn(`not used in script.md: ${rep.unusedImages.join(', ')}`);
   for (const w of rep.warnings) log.warn(w);
 };
 
@@ -81,14 +76,13 @@ const doRender = async (p: ReelPaths, o: Common & { draft?: boolean }, planRepor
 };
 
 const program = new Command();
-program.name('reel').description('Voice + images → polished Instagram reel. No AI in the render path.');
+program.name('reel').description('Voice + images → Instagram reel: images edge to edge with motion, word-by-word captions.');
 
 const common = (c: Command) =>
   c
-    .option('-p, --preset <name>', `settings preset (${PRESET_NAMES.join(', ')})`)
-    .option('--seed <n>', 'reshuffle motion/transition choices')
-    .option('--intensity <0..1>', 'motion amount')
-    .option('-s, --set <key=value...>', 'override any setting, e.g. --set captions.y=0.55 look.grain=0');
+    .option('-c, --captions <mode>', 'word | phrase | off')
+    .option('--seed <n>', 'reshuffle automatic motion/transition picks')
+    .option('-s, --set <key=value...>', 'override any setting, e.g. --set captions.y=0.7 images.motion=0.8');
 
 program
   .command('doctor')
@@ -104,23 +98,25 @@ program
 program
   .command('new <name>')
   .description('create a reel folder')
-  .option('-p, --preset <name>', 'preset to store in reel.json', 'anyash-light')
-  .action((name: string, o) => {
+  .action((name: string) => {
     const p = reelPaths(name);
     if (fs.existsSync(p.dir) && fs.readdirSync(p.dir).length) throw new Error(`${p.dir} already exists`);
     ensureDir(p.images);
-    writeJson(p.settings, { preset: o.preset, endCard: { cta: 'Follow for more' }, look: { brandLine: '' } });
+    writeJson(p.settings, {});
     fs.writeFileSync(
       path.join(p.dir, 'README.txt'),
       [
         'Drop in:',
-        '  voice.m4a      main voiceover (any audio format)',
+        '  voice.m4a      your voiceover (any audio format)',
         '  hook.m4a       optional separate hook recording (played first)',
-        '  images/        01-name.jpg, 02-name.jpg … (filename order = default order)',
+        '  images/        your images (filename order = default order)',
         '  music.mp3      optional, ducked under the voice',
+        '  script.md      optional: which image shows when, e.g.',
+        '                   0:00    1st',
+        '                   0:03.5  2nd   zoom-out',
         '',
-        'Then:  reel prep ' + name + '   → edit script.md if you like →   reel render ' + name,
-        'Settings for this reel live in reel.json (see README in the project root).',
+        'Then:  reel make ' + name,
+        'Per-reel settings go in reel.json (see README in the project root).',
       ].join('\n') + '\n',
     );
     log.ok(`created ${path.relative(process.cwd(), p.dir)}/`);
@@ -129,7 +125,7 @@ program
 common(
   program
     .command('prep <name>')
-    .description('clean + tighten audio, transcribe, ingest images, write script.md if missing')
+    .description('clean + tighten audio, transcribe, ingest images, write a script.md draft if missing')
     .option('--no-whisper', 'require <piece>.words.json instead of transcribing'),
 ).action(async (name: string, o) => {
   const p = existing(name);
@@ -137,7 +133,7 @@ common(
   doPlan(p, o);
 });
 
-common(program.command('plan <name>').description('script.md + settings → timeline.json')).action((name: string, o) => {
+common(program.command('plan <name>').description('script.md + settings → timeline.json (instant)')).action((name: string, o) => {
   doPlan(existing(name), o);
 });
 

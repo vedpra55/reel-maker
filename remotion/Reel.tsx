@@ -1,48 +1,59 @@
 import React, { useMemo } from 'react';
-import { AbsoluteFill, Sequence, useCurrentFrame, useVideoConfig } from 'remotion';
-import type { ReelProps, TBeat } from '../shared/schema';
+import { AbsoluteFill, Sequence, useVideoConfig } from 'remotion';
+import type { ReelProps, TShot } from '../shared/schema';
 import { AudioMix } from './AudioMix';
-import { BeatView } from './beats/BeatView';
-import { CaptionLayer, beatAt, surfaceOf } from './captions/CaptionLayer';
-import { BrandLine, Grain, ProgressBar, Vignette } from './fx/Overlays';
-import { TRANSITION_FRAMES, TransitionIn } from './fx/Transition';
+import { Captions } from './captions/Captions';
+import { KenBurns } from './fx/KenBurns';
+import { BrandLine, Grain, Scrim, Vignette } from './fx/Overlays';
+import { ShotTransition } from './fx/Transition';
 import { ensureFonts } from './theme/fonts';
 import { msToFrame } from './theme/motion';
 
 ensureFonts();
 
+/**
+ * Images edge to edge, one after another. Each transition is centred on the cut:
+ * the incoming shot starts half a transition early, the outgoing one ends half late.
+ */
 export const Reel: React.FC<ReelProps> = ({ timeline: tl, settings: s }) => {
   const { fps } = useVideoConfig();
-  const frame = useCurrentFrame();
-  const nowMs = (frame / fps) * 1000;
-  const current = beatAt(tl.beats, nowMs);
-  const surface = surfaceOf(current, s);
+  const total = Math.max(1, msToFrame(tl.durationMs, fps));
+  const tFrames = Math.round((s.images.transitionMs / 1000) * fps);
 
-  const beats = useMemo(
-    () =>
-      tl.beats.map((b: TBeat, i: number) => {
-        const start = msToFrame(b.startMs, fps);
-        const end = i === tl.beats.length - 1 ? Math.max(start + 1, msToFrame(tl.durationMs, fps)) : msToFrame(b.endMs, fps);
-        const t = i === 0 ? 0 : Math.min(TRANSITION_FRAMES[b.transition], start);
-        const pages = tl.pages.filter((p) => p.startMs >= b.startMs - 1 && p.startMs < b.endMs);
-        return { b, from: start - t, t, dur: end - start + t, pages };
-      }),
-    [tl, fps],
-  );
+  const shots = useMemo(() => {
+    const half = (sh: TShot | undefined) => (!sh || sh.transition === 'cut' ? 0 : Math.floor(tFrames / 2));
+    return tl.shots.map((sh: TShot, i: number) => {
+      const next = tl.shots[i + 1];
+      const cutIn = msToFrame(sh.startMs, fps);
+      const cutOut = next ? msToFrame(next.startMs, fps) : total;
+      const inHalf = i === 0 ? 0 : half(sh);
+      const outHalf = half(next);
+      const from = Math.max(0, cutIn - inHalf);
+      const to = Math.min(total, cutOut + outHalf);
+      return {
+        sh,
+        from,
+        dur: Math.max(1, to - from),
+        inFrames: (cutIn - from) * 2,
+        exit: next && next.transition !== 'cut' ? next.transition : null,
+        outFrames: (to - cutOut) * 2,
+      };
+    });
+  }, [tl.shots, fps, total, tFrames]);
 
   return (
-    <AbsoluteFill style={{ background: s.colors.dark }}>
-      {beats.map(({ b, from, t, dur, pages }) => (
-        <Sequence key={b.id} from={from} durationInFrames={Math.max(1, dur)} name={`${b.kind} ${b.image?.src ?? b.bg ?? ''}`}>
-          <TransitionIn type={b.transition} frames={t} intensity={s.intensity}>
-            <BeatView beat={b} settings={s} durationInFrames={dur} pages={pages} />
-          </TransitionIn>
+    <AbsoluteFill style={{ background: '#000' }}>
+      {shots.map(({ sh, from, dur, inFrames, exit, outFrames }) => (
+        <Sequence key={sh.id} from={from} durationInFrames={dur} name={`${sh.src} · ${sh.motion}`}>
+          <ShotTransition enter={sh.transition} inFrames={inFrames} exit={exit} outFrames={outFrames} durationInFrames={dur}>
+            <KenBurns shot={sh} durationInFrames={dur} amount={s.images.motion} />
+          </ShotTransition>
         </Sequence>
       ))}
-      <Vignette amount={surface === 'paper' ? s.look.vignette * 0.35 : s.look.vignette} />
-      <CaptionLayer timeline={tl} settings={s} />
-      <BrandLine settings={s} onLight={surface === 'paper'} />
-      {s.look.progressBar ? <ProgressBar settings={s} /> : null}
+      <Vignette amount={s.look.vignette} />
+      {s.captions.mode !== 'off' ? <Scrim amount={s.look.scrim} y={s.captions.y} /> : null}
+      <Captions words={tl.words} settings={s} />
+      <BrandLine settings={s} />
       <Grain amount={s.look.grain} />
       <AudioMix timeline={tl} settings={s} />
     </AbsoluteFill>

@@ -12,7 +12,13 @@ export const ACTIVE = path.join(ROOT, 'remotion', 'generated', 'active.json');
 export const writeActive = (props: { settings: unknown; timeline: unknown }) => writeJson(ACTIVE, props);
 
 export const ensureActive = () => {
-  if (!fs.existsSync(ACTIVE)) writeActive({ settings: demoSettings, timeline: demoTimeline });
+  let ok = false;
+  try {
+    ok = JSON.parse(fs.readFileSync(ACTIVE, 'utf8'))?.timeline?.version === demoTimeline.version;
+  } catch {
+    /* missing or unreadable */
+  }
+  if (!ok) writeActive({ settings: demoSettings, timeline: demoTimeline });
 };
 
 // `tsx pipeline/active.ts` (postinstall) creates the placeholder

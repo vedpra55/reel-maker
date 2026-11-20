@@ -1,22 +1,18 @@
 # Reel Maker
 
-You give it **voice + images**. It gives you a polished 1080×1920 Instagram reel with:
+You give it **voice + images (+ an optional script.md saying which image shows when)**.
+It gives you a 1080×1920 Instagram reel:
 
-* word-by-word kinetic captions
-* Ken Burns motion on images
-* stat beats, text-only beats and split layouts
-* transitions and SFX
-* loudness-normalised audio
+* images edge to edge with smooth camera motion
+* transitions where both images move
+* simple word-by-word captions
+* cleaned voice at -14 LUFS
 
-Every visual decision comes from **rules and your settings**, so the same inputs always give the same video.
-The only model involved is whisper.cpp, which runs locally on your Mac and only provides word timings.
+There's no AI in the render. Whisper (whisper.cpp, local) only supplies the word timings.
 
 ```
-voice.m4a + images/ ──► reel make ──► out/reel.mp4  + contact-sheet.jpg + report.txt
+voice.m4a + images/ + script.md ──► reel make ──► out/reel.mp4
 ```
-
-The tool is built on **Remotion** (React/Chromium) for visuals and **ffmpeg** for audio and the final file.
-It also uses **whisper.cpp** for word timings.
 
 ---
 
@@ -31,149 +27,84 @@ The script does the following:
 1. Installs `node`, `ffmpeg` and `cmake` with Homebrew. It asks first.
 2. Runs `npm install`.
 3. Links the `reel` command.
-4. Runs `reel doctor --fix`. That downloads Remotion's headless Chrome (about 100 MB), builds whisper.cpp with Metal
-   and downloads the Whisper model set in `reel.config.json`. The default is `small.en` (about 466 MB), stored in
-   `~/.reel-maker`.
+4. Runs `reel doctor --fix`. That downloads Remotion's headless Chrome (~100 MB), builds whisper.cpp and downloads
+   the Whisper model (`small.en`, ~466 MB, saved in `~/.reel-maker/`).
 
-Check your setup at any time:
-
-```bash
-reel doctor          # report only
-reel doctor --fix    # install what's missing (asks before each step)
-```
+If `reel` says *command not found*, use `./reel …` from the project folder, or add an alias:
+`echo "alias reel='$PWD/reel'" >> ~/.bash_profile`.
 
 To try it without recording anything:
 
 ```bash
-reel example && reel make example
+./reel example && ./reel make example
 ```
-
-That builds a demo reel. Its voice is a synthetic hum, so only the timing is real.
 
 ---
 
 ## Making a reel
 
 ```bash
-reel new london-dentist
-# drop into reels/london-dentist/:
-#   voice.m4a        your voiceover (m4a / mp3 / wav / anything ffmpeg reads)
-#   hook.m4a         optional – a separately recorded hook, played first
-#   images/          01-bigben.jpg, 02-clinic.heic …   (filename order = default order)
-#                    (images dropped loose in the reel folder also work)
-#   music.mp3        optional – automatically ducked under the voice
-reel prep london-dentist      # clean audio, transcribe, write script.md
-reel render london-dentist    # → reels/london-dentist/out/reel.mp4
+reel new my-reel
+# put into reels/my-reel/:
+#   voice.mp3      your voiceover (mp3 / m4a / wav …)
+#   images/        your images (images placed straight in the reel folder also work)
+#   script.md      which image shows when (optional – see below)
+#   hook.m4a       optional separately recorded hook, played first
+#   music.mp3      optional background music, ducked under the voice
+reel make my-reel             # → reels/my-reel/out/reel.mp4
 ```
 
 | Command | What it does |
 |---|---|
 | `reel make <name>` | prep (only if inputs changed) + plan + render |
-| `reel render <name> --draft` | half resolution, fast encode, for checking timing |
+| `reel render <name> --draft` | half resolution, fast, for checking timing |
 | `reel still <name> 2.5 7` | single frames to `out/stills/`, takes seconds |
-| `reel preview <name>` | Remotion Studio: scrub, play, tweak settings live |
-| `reel plan <name>` | re-plan after editing `script.md` (no re-transcribe) |
-| `reel render <name> --no-plan` | render your hand-edited `timeline.json` as-is |
-| `reel list` | list your reels and their state |
+| `reel plan <name>` | re-read script.md (instant; no re-transcribing) |
+| `reel preview <name>` | Remotion Studio: play, scrub, try settings live |
+| `reel doctor [--fix]` | check / install ffmpeg, Chrome, whisper.cpp |
 
-Common flags: `--preset anyash-dark`, `--intensity 0.7`, `--seed 3` (reshuffles motion choices),
-and `--set captions.y=0.55 look.grain=0` (any setting).
-
-### Least effort
-
-Give it voice and images only.
-`prep` writes a `script.md` from the transcript, with your images spread over the sentences in filename order.
-Render as it is.
-
-### More control: edit `script.md`
-
-```md
-# hook
-Nobody watches past the *first second.*
-
-# body
-[img 01-studio] So we rebuilt our whole process from the ground up.
-We cut every video down to the _one idea_ that matters.
-[stat] *10K* followers in just six weeks.
-[img 02-desk split] The secret was not a bigger budget.
-[text] Write the hook first. Then everything else.
-[img 03-city bw focus=top] Our whole $15,000 journey started with one decision.
-[end] Follow for more.
-```
-
-| Mark | Meaning |
-|---|---|
-| `# hook` / `# body` | The hook gets bigger kinetic type. With a `hook.m4a`, the hook section maps to that file. |
-| `*word*` / `*two words*` | Force the keyword: heavy, accent colour or bar. |
-| `_words_` | Force the italic-serif "closer" (like *practice* / *journey.* in the references). |
-| `[img name]` | Cut to that image on the next word. Name prefixes work: `[img 01]`. |
-| `[img name split]` | Rounded image on top, text panel below. |
-| `[img name bw]` `warm` `duo` | Image treatment. `duo` is a terracotta duotone. |
-| `[img name focus=top]` | Where the camera move centres: `top`, `bottom`, `left`, `right` or `center`. |
-| `[img name zoom-out]` | Force a move: `zoom-in`, `zoom-out`, `pan-left`, `pan-right`, `pan-up` or `drift`. |
-| `[text]` `[text dark]` `[text brand]` | Text-only kinetic beat on paper, dark or terracotta. |
-| `[stat]` | Big counting number beat. The number is found in the phrase. |
-| `[end]` | The end card starts here. Without it, the end card is added after the voice. |
-| `\|` | Force a caption break. |
-
-How `script.md` and the audio combine:
-
-* **The script's spelling wins**, for things like £ signs, brand names and capitals.
-* **The audio's timing wins.**
-* "fifteen thousand dollars" in the audio matches `$15,000` in the script.
-* If you ad-lib words that aren't in the script, `plan` lists them.
-
-### Already have word timings?
-
-Put `voice.words.json` (and `hook.words.json`) next to the audio and Whisper is skipped.
-Accepted formats:
-
-* `[{text, startMs, endMs}]`
-* `[{word, start, end}]` (seconds)
-* whisper / whisperX JSON
-
-Timings refer to the original file. Pause-tightening is mapped onto them automatically.
+Common flags: `--captions phrase`, `--seed 3` (reshuffles the automatic motion and transition picks),
+and `--set captions.size=130 images.motion=0.8` (any setting).
 
 ---
 
-## What the rules do
+## script.md: which image shows when
 
-**Audio** (ffmpeg)
+One line per image: **time**, **image**, then any **options** in any order.
 
-1. High-pass at 80 Hz, light denoise and 3:1 compression.
-2. Pauses longer than 450 ms are cut to 300 ms, which removes dead air.
-3. Hook, a 150 ms gap and the voice are joined.
-4. Two-pass loudnorm to **-14 LUFS**, true peak -1.5 dB.
+```
+# my-reel
+0:00     1st
+0:03.5   2nd     zoom-out
+0:07     3rd     push      focus=top
+0:12.2   4th.png whip
+0:16     5th     bw        pan-up
+0:21     1st     crossfade
+```
 
-**Captions**
+**Time**
+* Write `0:03.5`, `3.5` or `[0:03]`.
+* It means where you are **in your original voice file**, as shown in any audio player.
+* The tool removes dead air from the voice, and it moves your times to match, so you never have to adjust for it.
+* If a cut is within 0.15 s of a word, it lands on that word.
+* With a separate hook recording, `hook 0:01  1st` means 1 second into `hook.m4a`.
 
-* 1–4 words per page. Pages break on pauses, punctuation and length.
-* Marked spans are never split. A page never ends on a dangling "the".
-* Words appear as they are spoken, 60 ms early.
-* Each page gets one keyword, picked in this order:
-  1. `*marked*`
-  2. numbers
-  3. your keyword list
-  4. proper nouns
-  5. the longest word
-* Two styles:
-  * **inline**: calm, and the spoken word lights up
-  * **stack**: the reference look. A small light lead line, a huge heavy keyword, and an italic serif closer tucked under it.
-* `emphasisRatio` (default 30%) decides how many pages over images get the stack treatment, so emphasis stays rare.
+**Image**
+* A file name, with or without extension.
+* A unique start of the name is enough: `1st`, `02`.
+* The same image can appear more than once.
 
-**Beats** (what's on screen)
+**Options**
+* Camera move: `zoom-in` `zoom-out` `pan-left` `pan-right` `pan-up` `pan-down` `drift` `tilt`
+* Transition into this image: `cut` `crossfade` `push` `push-up` `zoom` `whip` `slide-up`
+* `focus=top|bottom|left|right|center`: which part of the photo the move stays on
+* `bw` or `warm`: colour treatment
 
-* The hook comes first, and frame 0 already shows text.
-* After that, your markers decide.
-* Unmarked stretches get your unused images.
-* An image held longer than 3 s is split into a punch-in or reframe, or into a text beat on a strong keyword.
-* Number phrases become stat beats, at most one every 8 s.
-* No camera move repeats three times in a row.
-* Transitions land so the new visual is fully in on the word.
-* SFX are sparse: a whoosh on animated cuts, a pop on keyword bars, a tick and hit on stats, and a riser into the end card.
+Options you leave out are picked automatically, and the same move or transition never comes twice in a row.
 
-`timeline.json` is the contract between planning and rendering.
-It is plain JSON you can hand-edit, and it is also where AI can plug in later without touching the renderer.
+Lines starting with `#` or `//` are comments.
+**No script.md, or no image lines in it:** `reel prep` writes a draft that spreads your images evenly over the voice,
+landing each one on a sentence start. Edit the times, then run `reel make`.
 
 ---
 
@@ -181,83 +112,40 @@ It is plain JSON you can hand-edit, and it is also where AI can plug in later wi
 
 Settings are resolved in this order, later ones winning:
 
-1. schema defaults
-2. preset
-3. `reel.config.json` in the project root: your defaults for every reel
-4. `reels/<name>/reel.json`: this reel only
-5. CLI `--set`
+1. built-in defaults
+2. `reel.config.json` (project root, every reel)
+3. `reels/<name>/reel.json` (this reel)
+4. `--set` on the command line
 
-`reel.config.json` is where project-wide choices go, such as the Whisper model, your brand line or your usual preset:
-
-```json
-{
-  "whisper": { "model": "small.en" },
-  "look": { "brandLine": "@anyash" }
-}
-```
-
-### Whisper model
-
-| Model | Download | Notes |
-|---|---|---|
-| `tiny.en` | ~75 MB | fastest; word timings drift noticeably |
-| `base.en` | ~142 MB | fast; OK for clear, slow voiceovers |
-| `small.en` (default) | ~466 MB | good balance |
-| `medium.en` | ~1.5 GB | most accurate English-only option |
-| `large-v3-turbo` | ~1.6 GB | multilingual |
-
-There are also multilingual versions without `.en`: `tiny`, `base`, `small` and `medium`.
-
-If you write `script.md`, the words on screen come from your script and Whisper only supplies timings,
-so a small model is usually enough.
-After changing the model, run `reel doctor --fix` to download it.
-Transcripts are cached per model.
-
-Your `reel.json` only needs what you change:
+Only write what you change:
 
 ```json
 {
-  "preset": "anyash-light",
-  "intensity": 0.6,
-  "captions": { "y": 0.58, "emphasisRatio": 0.35, "keywords": ["Anyash", "London"] },
-  "look": { "brandLine": "@anyash", "grain": 0.03 },
-  "endCard": { "cta": "Follow for more", "sub": "new reel every week" }
+  "captions": { "mode": "phrase", "size": 120, "highlight": "#E8A04C", "replace": { "anyesh": "Anyash" } },
+  "images": { "motion": 0.7, "transitions": ["push", "zoom", "whip"] },
+  "whisper": { "model": "small.en" }
 }
 ```
 
 | Group | Keys (defaults) |
 |---|---|
-| top level | `preset` (anyash-light), `seed` (1), `intensity` (0.5) |
-| `type` | `serif` (Playfair Display \| Instrument Serif), `closer` (serif \| light-italic), `captionSize` 74, `keySize` 150, `leadSize` 58, `keyWeight` 800, `keyItalic`, `uppercaseKeys` |
-| `colors` | `paper` #F4EEE6, `ink` #1C1410, `dark` #15100D, `primary` #9B421A, `accent` #E8A04C, `onImage` #FFFFFF |
-| `captions` | `style` (auto \| inline \| stack), `maxWords` 4, `hookMaxWords` 3, `maxCharsPerLine` 18, `pauseBreakMs` 220, `leadInMs` 60, `y` 0.6, `emphasisRatio` 0.3, `wordAnim` (pop \| slide-up \| blur-in \| none), `karaoke`, `keyStyle` (auto \| color \| bar), `keywords` [] |
-| `pacing` | `minHoldS` 1, `maxHoldS` 3, `hookMaxS` 3.5, `statEveryS` 8, `transitions` [zoom-punch, slide, wipe, whip] (+ cut, fade), `autoTextBeats`, `autoStatBeats` |
-| `look` | `grain` 0.04, `vignette` 0.3, `glow` 0.35, `scrim` 0.55, `imageTreatment`, `surface` (light \| dark), `grid`, `progressBar`, `brandLine`, `brandLineY` 0.73 |
-| `audio` | `lufs` -14, `tightenPauses`, `maxPauseMs` 450, `keepPauseMs` 300, `denoise`, `hookGapMs` 150, `sfx`, `sfxVolume` 0.1, `musicVolume` 0.12, `voiceVolume` 1 |
-| `endCard` | `enabled`, `durationS` 2, `cta`, `sub`, `bg` (brand \| dark \| paper) |
-| `whisper` | `model` (small.en) – see the table above |
+| `captions` | `mode` (**word** = one word at a time · phrase = a few words appearing one by one · off), `size` 110, `weight` 800, `color` #FFFFFF, `highlight` '' (phrase mode: colour of the spoken word), `uppercase` false, `punctuation` false, `y` 0.64 (vertical position), `maxWords` 3, `pauseBreakMs` 300, `leadInMs` 40, `holdMs` 500, `anim` (pop \| fade \| none), `replace` {} (spelling fixes) |
+| `images` | `motion` 0.55 (how far the camera moves, 0–1), `motions` [auto rotation], `transitions` [push, zoom, crossfade, whip, slide-up], `transitionMs` 380, `snapToWordMs` 150, `treatment` none |
+| `look` | `scrim` 0.45 (shade behind captions), `vignette` 0.25, `grain` 0, `brandLine` '', `brandLineY` 0.9 |
+| `audio` | `lufs` -14, `tightenPauses` true, `maxPauseMs` 450, `keepPauseMs` 300, `denoise` true, `whoosh` false, `sfxVolume` 0.12, `musicVolume` 0.12, `voiceVolume` 1, `tailMs` 500, `hookGapMs` 150 |
+| `whisper` | `model`: tiny.en (75 MB) · base.en (142 MB) · **small.en** (466 MB) · medium.en (1.5 GB) · large-v3-turbo (multilingual) |
 | `export` | `fps` 30, `crf` 20, `maxrate` 10M, `x264Preset` slow, `audioBitrate` 192k, `sizeCapMB` 30, `concurrency` 3, `draftScale` 0.5 |
-| `safeZone` | px kept clear of Instagram's UI: `top` 220, `bottom` 480, `sides` 70, `right` 150 |
+| `safeZone` | px kept clear of Instagram's UI: `top` 220, `bottom` 420 |
 
-There are three presets:
+**Fixing a misheard word:** add it to `captions.replace`, for example `{ "anyesh": "Anyash" }`. This applies to every
+reel if you put it in `reel.config.json`.
 
-* `anyash-light`: paper-grid text beats, terracotta keywords, amber bars
-* `anyash-dark`: near-black text beats, amber keywords, warm image grade
-* `minimal`: colour-only keywords, gentle motion, no glow or grain
+**After changing the Whisper model**, run `reel doctor --fix` to download it.
+Models live in `~/.reel-maker/models/`.
 
-Add your own in `shared/presets.ts`.
-
-**Colour rule:** amber `#E8A04C` is never used as text on paper, because the contrast is about 2:1.
-It is used as a bar behind dark text, or as text on dark backgrounds and images.
-
-### Tweaking in Studio
-
-`reel preview <name>` opens Remotion Studio with the reel loaded.
-
-* The right-hand panel edits settings live.
-* To keep a change, switch the panel to **JSON**, copy the `settings` values you changed into `reel.json`, then
-  `reel render`.
-* Studio can't save back to your reel by itself, so it shows a "can't save default props" notice. You can ignore it.
+**Studio** (`reel preview <name>`): the settings panel changes the preview live.
+To keep a change, copy the values from the panel's JSON view into `reel.json`.
+You can ignore Studio's "can't save default props" notice.
 
 ---
 
@@ -265,47 +153,33 @@ It is used as a bar behind dark text, or as text on dark backgrounds and images.
 
 `reels/<name>/out/` contains:
 
-* `reel.mp4`: 1080×1920, 30 fps, H.264 High, yuv420p, bt709, AAC 192k, faststart. Re-encoded once if it is over the size cap.
-* `contact-sheet.jpg`: one frame per beat, for a quick visual check.
-* `report.txt`: beats, alignment score, warnings, size and render time.
-
-On an 8 GB M-series Mac, renders run with concurrency 3.
-The demo reel (32 s) takes about 1.5 minutes on a 4-core Linux box. Expect similar or faster on an M3.
+* `reel.mp4`: 1080×1920, 30 fps, H.264 High, yuv420p, AAC 192k, faststart. Re-encoded once if it is over the size cap.
+* `contact-sheet.jpg`: one frame per image shot.
+* `report.txt`: every shot with its time in the finished reel, plus any warnings (unknown image names, unused images).
 
 ---
 
 ## Project layout
 
 ```
-bin/reel.ts            CLI
-pipeline/              doctor, prep (audio, whisper, images), script parser, aligner,
-                       phrases, roles, beats, sfx, plan, render, finalize, synth (SFX)
-shared/schema.ts       zod schemas: Settings + Timeline (shared by pipeline and Remotion)
-shared/presets.ts      presets
-remotion/              Reel composition: beats/, captions/, fx/, theme/
-assets/fonts/          Montserrat, Playfair Display, Instrument Serif (OFL, bundled, offline)
-assets/sfx/            generated on first run – drop your own whoosh/pop/tick/riser/hit.wav to replace
-reels/<name>/          your inputs, .build/ (cache), timeline.json, out/
-tests/                 rules-engine tests (npm test)
+bin/reel.ts           CLI
+pipeline/             doctor, prep (audio, whisper, images), script.md parser, plan, render, finalize
+shared/schema.ts      settings + timeline schemas (shared with the renderer)
+shared/captions.ts    word / phrase caption timing
+remotion/             the video: fx/KenBurns (camera moves), fx/Transition, captions/Captions
+assets/fonts/         Montserrat (OFL, bundled, works offline)
+reels/<name>/         your inputs, .build/ (cache), timeline.json, out/
+tests/                npm test
 ```
-
-## Swapping sounds
-
-The default SFX are synthesised in code.
-For more punch, drop `whoosh.wav`, `pop.wav`, `tick.wav`, `riser.wav` and `hit.wav` from a free pack into `assets/sfx/`.
-Pixabay and Mixkit both have packs; check each pack's licence.
 
 ## Troubleshooting
 
 * **`whisper.cpp … not installed`**: run `reel doctor --fix`.
-  You can also supply `voice.words.json` and use `--no-whisper`.
-* **"script matches only 60%"**: `script.md` belongs to different audio, or the read drifted a lot.
-  Delete `script.md` and run `reel prep` to regenerate it.
-* **A word is mistimed**: edit its times in `timeline.json`, then run `reel render --no-plan`.
+  Or put your own `voice.words.json` next to the audio and use `--no-whisper`.
+* **"no image matches …"**: check the name in `script.md` against the files in `images/`.
+* **A cut feels a little early or late**: change its time in `script.md` and run `reel make` again.
+  Only planning and rendering re-run.
 * **Use your own Chrome**: `REEL_BROWSER=/path/to/chrome-headless-shell reel render …`
 * **Debug output**: `REEL_DEBUG=1 reel …` prints stack traces.
 
-## Licence notes
-
-* Remotion is free for individuals and companies of up to 3 people. Beyond that you need a company licence.
-* The fonts are SIL OFL; their licences are in `assets/fonts/`.
+Remotion is free for individuals and companies of up to 3 people. Beyond that you need a company licence.

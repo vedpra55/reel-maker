@@ -1,41 +1,44 @@
-/** `reel plan`: prep.json + script.md + settings → timeline.json (deterministic, cheap, re-runnable). */
+/** `reel plan`: prep.json + script.md + settings → timeline.json (deterministic, instant, re-runnable). */
 import fs from 'node:fs';
-import { timelineSchema, type Settings, type TPage, type Timeline } from '../shared/schema';
-import { align, tokensFromWords, type TimedToken } from './align';
-import { planBeats, type PlanPage } from './beats';
-import { paginate } from './phrases';
-import type { Prep } from './prep';
+import { timelineSchema, type Settings, type TShot, type TSfx, type TWord, type Timeline } from '../shared/schema';
+import { toFinal, type Prep } from './prep';
 import { readJson, writeJson, type ReelPaths } from './paths';
-import { assignRoles, findKey, keyStyleFor, pickEmphasis } from './roles';
-import { parseScript, type Marker } from './script';
-import { planSfx } from './sfx';
+import { parseScript, spreadTimes, type ImageLine } from './script';
 import { createRng, hashString } from './util/rng';
-import { isSentenceEnd } from './util/text';
 
-export type PlanReport = {
-  alignScore: number | null;
-  unmatched: string[];
-  warnings: string[];
-  beats: Record<string, number>;
-  pages: number;
-  stackPages: number;
+export type PlanReport = { shots: number; warnings: string[]; unusedImages: string[]; auto: boolean };
+
+type Asset = { name: string; src: string };
+
+export const resolveImage = (name: string, images: Asset[]): Asset | undefined => {
+  const n = name.toLowerCase().replace(/\.[a-z0-9]+$/, '');
+  return (
+    images.find((i) => i.name.toLowerCase() === n) ??
+    images.find((i) => i.name.toLowerCase().startsWith(n)) ??
+    images.find((i) => i.name.toLowerCase().includes(n))
+  );
 };
 
-/** without a `# hook` section and hook audio, the hook is the first sentence (capped) */
-const markHook = (toks: TimedToken[], prep: Prep, hasHookSection: boolean, s: Settings) => {
-  if (hasHookSection) return;
-  if (prep.hookEndMs !== null) {
-    for (const t of toks) t.section = t.startMs < prep.hookEndMs ? 'hook' : 'body';
-    return;
-  }
-  for (const t of toks) t.section = 'body';
-  const limit = (toks[0]?.startMs ?? 0) + s.pacing.hookMaxS * 1000;
-  for (const t of toks) {
-    if (t.startMs > limit) break;
-    if (t !== toks[0] && t.marker) break;
-    t.section = 'hook';
-    if (isSentenceEnd(t.text)) break;
-  }
+/** whole-word, case-insensitive spelling fixes from settings.captions.replace */
+export const applyReplacements = (words: TWord[], map: Record<string, string>): TWord[] => {
+  const entries = Object.entries(map);
+  if (!entries.length) return words;
+  return words.map((w) => {
+    let text = w.text;
+    for (const [from, to] of entries) {
+      const esc = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      text = text.replace(new RegExp(`(^|[^\\p{L}\\p{N}])${esc}(?=$|[^\\p{L}\\p{N}])`, 'giu'), (_m, pre) => pre + to);
+    }
+    return { ...w, text };
+  });
+};
+
+/** next item of a rotation, never the same as the previous pick */
+const rotate = <T,>(list: readonly T[], index: number, prev: T | undefined): T => {
+  if (!list.length) throw new Error('empty list');
+  let v = list[index % list.length];
+  if (v === prev && list.length > 1) v = list[(index + 1) % list.length];
+  return v;
 };
 
 export const buildTimeline = (
@@ -43,116 +46,125 @@ export const buildTimeline = (
   prep: Prep,
   scriptSrc: string | null,
   s: Settings,
-): { timeline: Timeline; words: TimedToken[]; report: PlanReport } => {
+): { timeline: Timeline; report: PlanReport } => {
+  if (prep.version !== 2) throw new Error('This reel was prepared by an older version – run "reel prep <name>" again.');
   const warnings: string[] = [];
-  let tokens: TimedToken[];
-  let alignScore: number | null = null;
-  let unmatched: string[] = [];
-  let trailing: Marker[] = [];
-  let hasHookSection = false;
+  const words: TWord[] = applyReplacements(
+    prep.words.map((w) => ({ text: w.text, startMs: w.startMs, endMs: w.endMs })),
+    s.captions.replace,
+  );
+  const lastWordEnd = words.length ? words[words.length - 1].endMs : prep.voice.durationMs;
+  let durationMs = Math.min(prep.voice.durationMs + s.audio.tailMs, lastWordEnd + s.audio.tailMs);
+  if (!prep.images.length) throw new Error('No images. Put them in images/ (or the reel folder) and run reel prep again.');
 
-  if (scriptSrc && scriptSrc.trim()) {
-    const parsed = parseScript(scriptSrc);
-    warnings.push(...parsed.warnings);
-    trailing = parsed.trailing;
-    hasHookSection = parsed.hasHookSection && parsed.tokens.some((t) => t.section === 'hook');
-    const res = align(parsed.tokens, prep.words);
-    tokens = res.words;
-    alignScore = res.score;
-    unmatched = res.unmatchedTranscript;
-    if (res.score < 0.85) {
-      warnings.push(`script matches only ${(res.score * 100).toFixed(0)}% of the spoken words – is script.md for this audio?`);
+  /* ---------- which image when ---------- */
+  type Cut = { atMs: number; asset: Asset; line?: ImageLine };
+  let cuts: Cut[] = [];
+  const parsed = scriptSrc ? parseScript(scriptSrc) : { lines: [], warnings: [] };
+  warnings.push(...parsed.warnings);
+  const auto = parsed.lines.length === 0;
+  if (auto) {
+    // no script lines: spread the images evenly in filename order
+    spreadTimes(words, prep.images.length, lastWordEnd).forEach((t, i) => cuts.push({ atMs: t, asset: prep.images[i] }));
+  } else {
+    for (const line of parsed.lines) {
+      const asset = resolveImage(line.image, prep.images);
+      if (!asset) {
+        warnings.push(`line ${line.line}: no image matches "${line.image}" (have: ${prep.images.map((i) => i.name).join(', ')})`);
+        continue;
+      }
+      const at = toFinal(line.piece, line.timeMs, prep.pieces);
+      if (at === null) {
+        warnings.push(`line ${line.line}: "hook" time given but there is no hook audio file`);
+        continue;
+      }
+      cuts.push({ atMs: at, asset, line });
+      if (line.endMs !== undefined) {
+        const end = toFinal(line.piece, line.endMs, prep.pieces);
+        if (end !== null && line === parsed.lines[parsed.lines.length - 1]) durationMs = Math.max(durationMs, end);
+      }
     }
-  } else tokens = tokensFromWords(prep.words);
-  if (!tokens.length) throw new Error('No words found.');
-  markHook(tokens, prep, hasHookSection, s);
+    if (!cuts.length) throw new Error('script.md has no usable image lines.');
+  }
 
+  // order, snap onto word starts, first image from frame 0
+  cuts.sort((a, b) => a.atMs - b.atMs);
+  const starts = words.map((w) => w.startMs);
+  for (const c of cuts) {
+    if (s.images.snapToWordMs <= 0 || c.atMs === 0) continue;
+    const near = starts.reduce((best, x) => (Math.abs(x - c.atMs) < Math.abs(best - c.atMs) ? x : best), Infinity);
+    if (Math.abs(near - c.atMs) <= s.images.snapToWordMs) c.atMs = near;
+  }
+  cuts[0].atMs = 0;
+  cuts = cuts.filter((c, i) => {
+    const dup = i > 0 && c.atMs - cuts[i - 1].atMs < 200;
+    if (dup) warnings.push(`"${c.asset.name}" comes less than 0.2s after "${cuts[i - 1].asset.name}" – dropped`);
+    return !dup && c.atMs < durationMs;
+  });
+
+  /* ---------- shots ---------- */
   const rng = createRng(hashString(name) ^ s.seed);
-  const drafts = paginate(tokens, s);
-  const pages: PlanPage[] = drafts.map((pg, i) => {
-    const prevLast = drafts[i - 1]?.words.at(-1);
-    return { ...pg, info: findKey(pg, s, !prevLast || isSentenceEnd(prevLast.text)) };
-  });
-
-  const voiceEndMs = tokens[tokens.length - 1].endMs;
-  const { beats, durationMs } = planBeats({
-    pages,
-    images: prep.images.map((i) => ({ name: i.name, src: i.src })),
-    trailing,
-    settings: s,
-    rng,
-    voiceEndMs,
-    warnings,
-  });
-
-  // page styles: embedded beats always stack; overlay pages get stacked by emphasis ratio
-  const beatOf = (pg: PlanPage) => beats.find((b) => pg.startMs >= b.startMs - 1 && pg.startMs < b.endMs) ?? beats[beats.length - 1];
-  const overlay = pages.map((pg) => beatOf(pg).captions === 'overlay');
-  const emphasis =
-    s.captions.style === 'stack'
-      ? overlay
-      : s.captions.style === 'inline'
-        ? overlay.map(() => false)
-        : pickEmphasis(
-            pages.map((p) => p.info),
-            overlay,
-            s.captions.emphasisRatio,
-          );
-
-  const outPages: TPage[] = pages.map((pg, i) => {
-    const style = !overlay[i] || emphasis[i] ? 'stack' : 'inline';
-    const roles = assignRoles(pg, pg.info, style, s);
-    return {
+  const motionOffset = Math.floor(rng.next() * s.images.motions.length);
+  const transOffset = Math.floor(rng.next() * Math.max(1, s.images.transitions.length));
+  const shots: TShot[] = [];
+  cuts.forEach((c, i) => {
+    const endMs = i + 1 < cuts.length ? cuts[i + 1].atMs : durationMs;
+    const prev = shots[i - 1];
+    const motion = c.line?.motion ?? rotate(s.images.motions, motionOffset + i, prev?.motion);
+    let transition = c.line?.transition ?? (s.images.transitions.length ? rotate(s.images.transitions, transOffset + i, prev?.transition) : 'cut');
+    // a transition needs room on both sides of the cut
+    const room = Math.min(c.atMs - (prev?.startMs ?? 0), endMs - c.atMs);
+    if (i === 0) transition = 'cut';
+    else if (transition !== 'cut' && room < s.images.transitionMs + 150) {
+      if (!c.line?.transition) transition = 'cut';
+      else warnings.push(`line ${c.line.line}: shot too short for a ${transition} – it will look rushed`);
+    }
+    shots.push({
       id: i,
-      startMs: Math.round(pg.startMs),
-      endMs: Math.round(pg.endMs),
-      style,
-      keyStyle: keyStyleFor(pg.info, roles, s),
-      hook: pg.hook,
-      words: pg.words.map((w, k) => ({
-        text: w.text,
-        startMs: Math.round(w.startMs),
-        endMs: Math.round(w.endMs),
-        role: roles[k],
-        sentenceEnd: isSentenceEnd(w.text),
-      })),
-    };
+      startMs: Math.round(c.atMs),
+      endMs: Math.round(endMs),
+      src: c.asset.src,
+      motion,
+      focus: c.line?.focus ?? 'center',
+      treatment: c.line?.treatment ?? s.images.treatment,
+      transition,
+    });
   });
 
-  // speech regions for music ducking
+  const used = new Set(shots.map((x) => x.src));
+  const unusedImages = prep.images.filter((i) => !used.has(i.src)).map((i) => i.name);
+
+  /* ---------- sfx & ducking ---------- */
+  const sfx: TSfx[] = [];
+  if (s.audio.whoosh) {
+    let last = -Infinity;
+    for (const sh of shots) {
+      if (sh.id === 0 || sh.transition === 'cut' || sh.transition === 'crossfade') continue;
+      const at = Math.max(0, sh.startMs - s.images.transitionMs / 2 - 60);
+      if (at - last < 800) continue;
+      sfx.push({ kind: 'whoosh', atMs: Math.round(at), volume: s.audio.sfxVolume });
+      last = at;
+    }
+  }
   const speech: [number, number][] = [];
-  for (const w of tokens) {
-    const last = speech[speech.length - 1];
-    if (last && w.startMs - last[1] < 350) last[1] = w.endMs;
+  for (const w of words) {
+    const lastR = speech[speech.length - 1];
+    if (lastR && w.startMs - lastR[1] < 350) lastR[1] = w.endMs;
     else speech.push([w.startMs, w.endMs]);
   }
 
-  const timeline: Timeline = timelineSchema.parse({
-    version: 1,
+  const timeline = timelineSchema.parse({
+    version: 2,
     name,
-    durationMs,
+    durationMs: Math.round(durationMs),
     voice: prep.voice,
     music: prep.music ?? undefined,
     speech,
-    pages: outPages,
-    beats,
-    sfx: planSfx(beats, outPages, s),
+    shots,
+    words,
+    sfx,
   });
-
-  const counts: Record<string, number> = {};
-  for (const b of beats) counts[b.kind] = (counts[b.kind] ?? 0) + 1;
-  return {
-    timeline,
-    words: tokens,
-    report: {
-      alignScore,
-      unmatched,
-      warnings,
-      beats: counts,
-      pages: outPages.length,
-      stackPages: outPages.filter((p) => p.style === 'stack').length,
-    },
-  };
+  return { timeline, report: { shots: shots.length, warnings, unusedImages, auto } };
 };
 
 export const plan = (p: ReelPaths, s: Settings) => {
@@ -161,6 +173,5 @@ export const plan = (p: ReelPaths, s: Settings) => {
   const script = fs.existsSync(p.script) ? fs.readFileSync(p.script, 'utf8') : null;
   const res = buildTimeline(p.name, prep, script, s);
   writeJson(p.timeline, res.timeline);
-  writeJson(p.words, res.words);
   return res;
 };

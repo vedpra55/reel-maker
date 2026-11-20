@@ -10,9 +10,6 @@ const FONTS: { family: string; file: string; weight: string; style: 'normal' | '
   { family: 'Montserrat', file: 'montserrat-latin-800-normal.woff2', weight: '800', style: 'normal' },
   { family: 'Montserrat', file: 'montserrat-latin-800-italic.woff2', weight: '800', style: 'italic' },
   { family: 'Montserrat', file: 'montserrat-latin-900-normal.woff2', weight: '900', style: 'normal' },
-  { family: 'Playfair Display', file: 'playfair-display-latin-400-italic.woff2', weight: '400', style: 'italic' },
-  { family: 'Playfair Display', file: 'playfair-display-latin-600-italic.woff2', weight: '600', style: 'italic' },
-  { family: 'Instrument Serif', file: 'instrument-serif-latin-400-italic.woff2', weight: '400', style: 'italic' },
 ];
 
 let loaded = false;
