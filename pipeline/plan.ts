@@ -4,9 +4,16 @@ import { timelineSchema, type Settings, type TShot, type TSfx, type TWord, type 
 import { toFinal, type Prep } from './prep';
 import { readJson, writeJson, type ReelPaths } from './paths';
 import { parseScript, spreadTimes, type ImageLine } from './script';
+import { timeTextBlocks } from './textwords';
 import { createRng, hashString } from './util/rng';
 
-export type PlanReport = { shots: number; warnings: string[]; unusedImages: string[]; auto: boolean };
+export type PlanReport = { shots: number; warnings: string[]; unusedImages: string[]; auto: boolean; captionSource: 'script' | 'whisper' };
+
+/** where the voice actually starts (end of the leading silence) */
+const firstSpeech = (prep: Prep) => {
+  const lead = prep.silences.find(([s]) => s <= 1);
+  return lead ? lead[1] : 0;
+};
 
 type Asset = { name: string; src: string };
 
@@ -49,10 +56,28 @@ export const buildTimeline = (
 ): { timeline: Timeline; report: PlanReport } => {
   if (prep.version !== 2) throw new Error('This reel was prepared by an older version – run "reel prep <name>" again.');
   const warnings: string[] = [];
-  const words: TWord[] = applyReplacements(
-    prep.words.map((w) => ({ text: w.text, startMs: w.startMs, endMs: w.endMs })),
-    s.captions.replace,
-  );
+  const parsed = scriptSrc ? parseScript(scriptSrc) : { lines: [], warnings: [], hasText: false };
+  warnings.push(...parsed.warnings);
+
+  // captions: your "> …" text timed from the audio, otherwise the transcript
+  let source: TWord[];
+  if (parsed.hasText) {
+    const textLines = parsed.lines
+      .filter((l) => l.text)
+      .map((l) => ({ l, at: toFinal(l.piece, l.timeMs, prep.pieces) }))
+      .filter((x): x is { l: ImageLine; at: number } => x.at !== null)
+      .sort((a, b) => a.at - b.at);
+    const blocks = textLines.map(({ l, at }, i) => ({
+      startMs: i === 0 ? Math.min(at, firstSpeech(prep)) : at,
+      endMs: textLines[i + 1]?.at ?? prep.voice.durationMs,
+      text: l.text!,
+    }));
+    source = timeTextBlocks(blocks, prep.silences);
+  } else {
+    source = prep.words.map((w) => ({ text: w.text, startMs: w.startMs, endMs: w.endMs }));
+    if (!source.length) warnings.push('no words for captions – add "> …" lines to script.md, or run reel prep with whisper');
+  }
+  const words: TWord[] = applyReplacements(source, s.captions.replace);
   const lastWordEnd = words.length ? words[words.length - 1].endMs : prep.voice.durationMs;
   let durationMs = Math.min(prep.voice.durationMs + s.audio.tailMs, lastWordEnd + s.audio.tailMs);
   if (!prep.images.length) throw new Error('No images. Put them in images/ (or the reel folder) and run reel prep again.');
@@ -60,8 +85,6 @@ export const buildTimeline = (
   /* ---------- which image when ---------- */
   type Cut = { atMs: number; asset: Asset; line?: ImageLine };
   let cuts: Cut[] = [];
-  const parsed = scriptSrc ? parseScript(scriptSrc) : { lines: [], warnings: [] };
-  warnings.push(...parsed.warnings);
   const auto = parsed.lines.length === 0;
   if (auto) {
     // no script lines: spread the images evenly in filename order
@@ -164,7 +187,7 @@ export const buildTimeline = (
     words,
     sfx,
   });
-  return { timeline, report: { shots: shots.length, warnings, unusedImages, auto } };
+  return { timeline, report: { shots: shots.length, warnings, unusedImages, auto, captionSource: parsed.hasText ? 'script' : 'whisper' } };
 };
 
 export const plan = (p: ReelPaths, s: Settings) => {

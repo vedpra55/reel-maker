@@ -1,6 +1,6 @@
 # Reel Maker
 
-You give it **voice + images (+ an optional script.md saying which image shows when)**.
+You give it **voice + images (+ an optional script.md saying which image shows when, and what you say)**.
 It gives you a 1080×1920 Instagram reel:
 
 * images edge to edge with smooth camera motion
@@ -8,7 +8,8 @@ It gives you a 1080×1920 Instagram reel:
 * simple word-by-word captions
 * cleaned voice at -14 LUFS
 
-There's no AI in the render. Whisper (whisper.cpp, local) only supplies the word timings.
+There's no AI in the render. Whisper (whisper.cpp, local) only supplies word timings for English reels.
+If you write your captions in `script.md`, Whisper isn't needed at all.
 
 ```
 voice.m4a + images/ + script.md ──► reel make ──► out/reel.mp4
@@ -101,6 +102,27 @@ One line per image: **time**, **image**, then any **options** in any order.
 * `bw` or `warm`: colour treatment
 
 Options you leave out are picked automatically, and the same move or transition never comes twice in a row.
+
+### Captions in your own words (Hinglish, brand names, exact spelling)
+
+Put what you say under each image as `>` lines:
+
+```
+0:00     1st     zoom-in
+> Last weeks mein baby kam move karta hai? Yeh bilkul galat hai.
+
+0:07.5   2nd     crossfade
+> Pehle jo kicks mehsoos hoti thi,
+```
+
+* The captions show your text **exactly as you wrote it**. Hinglish in English letters works.
+* Word timing comes from the audio:
+  * each line's words are spread over the moments you're actually speaking
+  * full stops and commas are matched to your real pauses
+  * a line's start is moved onto the nearest pause if your image time is a little off
+* When `script.md` has `>` lines, **Whisper isn't used at all**, so no model download and no transcription wait.
+* Write every spoken word, in order, or the timing drifts.
+* Without `>` lines, captions come from Whisper (English) as before.
 
 Lines starting with `#` or `//` are comments.
 **No script.md, or no image lines in it:** `reel prep` writes a draft that spreads your images evenly over the voice,

@@ -13,6 +13,9 @@
  *   options  any order: a motion (zoom-in zoom-out pan-left pan-right pan-up pan-down drift tilt),
  *            a transition into this image (cut crossfade push push-up zoom whip slide-up),
  *            focus=top|bottom|left|right|center, bw | warm
+ *   > text   the words spoken while this image is up – they become the captions, spelled exactly
+ *            as written (Hinglish in English letters works). Several > lines per image are fine.
+ *            With > text in the file, whisper is not used for captions.
  *   Lines starting with #, // or <!-- are comments. "- " bullets are fine.
  */
 import { FOCI, MOTIONS, TRANSITIONS, TREATMENTS, type Focus, type Motion, type Transition } from '../shared/schema';
@@ -27,9 +30,14 @@ export type ImageLine = {
   transition?: Transition;
   focus?: Focus;
   treatment?: (typeof TREATMENTS)[number];
+  /** caption text from the "> …" lines under this image */
+  text?: string;
 };
 
-export type ParsedScript = { lines: ImageLine[]; warnings: string[] };
+export type ParsedScript = { lines: ImageLine[]; warnings: string[]; hasText: boolean };
+
+/** quick check used by prep: does this script carry its own caption text? */
+export const scriptHasText = (src: string) => /^\s*>\s*\S/m.test(src.replace(/<!--[\s\S]*?-->/g, ''));
 
 const TIME = /^\[?(\d+(?::\d{1,2}){0,2}(?:\.\d+)?)\]?$/;
 
@@ -55,10 +63,19 @@ const tokenize = (line: string) => [...line.matchAll(/"([^"]+)"|'([^']+)'|(\S+)/
 export const parseScript = (src: string): ParsedScript => {
   const warnings: string[] = [];
   const lines: ImageLine[] = [];
+  let orphanText = '';
   const text = src.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ''));
   text.split('\n').forEach((raw, i) => {
     let line = raw.trim().replace(/^[-*•]\s+/, '');
     if (!line || line.startsWith('#') || line.startsWith('//')) return;
+    if (line.startsWith('>')) {
+      const said = line.replace(/^>+\s*/, '').trim();
+      if (!said) return;
+      const owner = lines[lines.length - 1];
+      if (owner) owner.text = owner.text ? `${owner.text} ${said}` : said;
+      else orphanText = orphanText ? `${orphanText} ${said}` : said;
+      return;
+    }
     let tokens = tokenize(line);
     let piece: ImageLine['piece'] = 'voice';
     if (tokens[0]?.toLowerCase() === 'hook') {
@@ -106,7 +123,11 @@ export const parseScript = (src: string): ParsedScript => {
     }
     lines.push(entry);
   });
-  return { lines, warnings };
+  if (orphanText) {
+    if (lines[0]) lines[0].text = lines[0].text ? `${orphanText} ${lines[0].text}` : orphanText;
+    else warnings.push('caption text (> lines) but no image lines – nothing to attach it to');
+  }
+  return { lines, warnings, hasText: lines.some((l) => !!l.text) };
 };
 
 /* ------------------------------------------------------------------ */

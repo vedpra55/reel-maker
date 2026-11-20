@@ -46,6 +46,7 @@ const existing = (name: string) => {
 const printPlan = (r: { report: PlanReport }) => {
   const rep = r.report;
   log.ok(`${rep.shots} image shot(s)${rep.auto ? ' – spread automatically (script.md has no image lines)' : ' from script.md'}`);
+  log.ok(rep.captionSource === 'script' ? 'captions: your "> …" text, timed from the audio' : 'captions: transcript');
   if (rep.unusedImages.length) log.warn(`not used in script.md: ${rep.unusedImages.join(', ')}`);
   for (const w of rep.warnings) log.warn(w);
 };

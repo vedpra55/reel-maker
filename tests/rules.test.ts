@@ -6,6 +6,7 @@ import { toFinal, toOriginal, type Prep, type PrepPiece } from '../pipeline/prep
 import { generateScript, parseScript, parseTime } from '../pipeline/script';
 import { resolveSettings } from '../pipeline/settings';
 import { applyCutMap, cleanWords, computeCutMap, mapTime, normaliseWords, unmapTime } from '../pipeline/words';
+import { distribute, speechIn, timeTextBlocks, wordWeight } from '../pipeline/textwords';
 
 const S = resolveSettings();
 
@@ -231,5 +232,62 @@ describe('timeline', () => {
     expect(p.seed).toBe(4);
     expect(resolveSettings().whisper.model).toBe('small.en');
     expect(resolveImage('2nd', [{ name: '2nd', src: 'x' }])).toBeTruthy();
+  });
+});
+
+describe('captions from your own text (> lines)', () => {
+  it('parses > lines onto the image above them', () => {
+    const r = parseScript(`> said before any image
+0:00 1st zoom-in
+> Last weeks mein baby kam move karta hai?
+> Yeh bilkul galat hai.
+0:07.5 2nd
+# a comment
+0:10 3rd
+> ab woh rolling`);
+    expect(r.hasText).toBe(true);
+    expect(r.lines[0].text).toBe('said before any image Last weeks mein baby kam move karta hai? Yeh bilkul galat hai.');
+    expect(r.lines[1].text).toBeUndefined();
+    expect(r.lines[2].text).toBe('ab woh rolling');
+  });
+
+  it('weights long words more than short ones', () => {
+    expect(wordWeight('mehsoos')).toBeGreaterThan(wordWeight('ka'));
+    expect(wordWeight('15000')).toBeGreaterThan(wordWeight('ek'));
+  });
+
+  it('finds speaking stretches between silences', () => {
+    expect(speechIn(0, 5000, [[1000, 1500], [3000, 3200]])).toEqual([[0, 1000], [1500, 3000], [3200, 5000]]);
+  });
+
+  it('puts sentence breaks on the real pauses', () => {
+    // two sentences, a pause from 2000 to 2600
+    const words = distribute('Yeh bilkul galat hai. Delivery paas aane par'.split(' '), [[0, 2000], [2600, 4600]]);
+    expect(words).toHaveLength(8);
+    expect(words[3].endMs).toBe(2000); // "hai." ends where the pause starts
+    expect(words[4].startMs).toBe(2600); // "Delivery" starts where it ends
+    for (let i = 1; i < words.length; i++) expect(words[i].startMs).toBeGreaterThanOrEqual(words[i - 1].endMs);
+  });
+
+  it('moves block boundaries onto the nearest pause', () => {
+    // the image time says 3.0 s, the speaker actually pauses 3.3–3.6 s
+    const w = timeTextBlocks(
+      [
+        { startMs: 0, endMs: 3000, text: 'pehli line yahan' },
+        { startMs: 3000, endMs: 6000, text: 'doosri line' },
+      ],
+      [[3300, 3600]],
+    );
+    expect(w.find((x) => x.text === 'doosri')!.startMs).toBe(3600);
+    expect(w.find((x) => x.text === 'yahan')!.endMs).toBe(3300);
+  });
+
+  it('plan uses the script text instead of the transcript', () => {
+    const prep = prepFor(TEXT, ['1st', '2nd']);
+    prep.silences = [[2500, 3000]];
+    const { timeline, report } = buildTimeline('t', prep, '0:00 1st\n> Pehle jo kicks\n0:03 2nd\n> mehsoos hoti thi', S);
+    expect(report.captionSource).toBe('script');
+    expect(timeline.words.map((w) => w.text)).toEqual(['Pehle', 'jo', 'kicks', 'mehsoos', 'hoti', 'thi']);
+    expect(timeline.words[3].startMs).toBe(3000);
   });
 });

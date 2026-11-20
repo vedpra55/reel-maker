@@ -8,7 +8,7 @@ import path from 'node:path';
 import type { Settings } from '../shared/schema';
 import { masterVoice, processPiece, type Piece } from './audio';
 import { AUDIO_EXT, ensureDir, findAudio, listImages, readJson, reelImages, writeJson, type ReelPaths } from './paths';
-import { generateScript } from './script';
+import { generateScript, scriptHasText } from './script';
 import { transcribeWords } from './transcribe';
 import { ffmpeg, probeImageSize, type Silence } from './util/ffmpeg';
 import { which } from './util/exec';
@@ -103,14 +103,18 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
 
   log.step('Words');
   const words: PrepWord[] = [];
+  const ownText = fs.existsSync(p.script) && scriptHasText(fs.readFileSync(p.script, 'utf8'));
+  if (ownText) log.ok('captions come from your "> …" lines in script.md – no transcription needed');
   let offset = 0;
   let usedWhisper = false;
   const placed: PrepPiece[] = [];
   for (const pc of pieces) {
     placed.push({ name: pc.name, offsetMs: offset, durationMs: pc.durationMs, originalMs: pc.originalMs, cutMap: pc.cutMap });
     const section = pc.name === 'hook' ? 'hook' : 'body';
-    let raw = suppliedWords(p.dir, pc.name);
-    if (raw) {
+    let raw: RawWord[] | null = ownText ? [] : suppliedWords(p.dir, pc.name);
+    if (ownText) {
+      // timings are worked out from the audio at plan time
+    } else if (raw) {
       raw = applyCutMap(cleanWords(raw), pc.cutMap);
       log.ok(`${pc.name}: ${raw.length} words from ${pc.name}.words.json`);
     } else {
@@ -120,7 +124,7 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
       usedWhisper = true;
       log.ok(`${pc.name}: ${raw.length} words`);
     }
-    for (const w of raw) words.push({ ...w, startMs: w.startMs + offset, endMs: w.endMs + offset, section });
+    for (const w of raw ?? []) words.push({ ...w, startMs: w.startMs + offset, endMs: w.endMs + offset, section });
     offset += pc.durationMs + (pc.name === 'hook' ? s.audio.hookGapMs : 0);
   }
   fixTimings(snapToSilences(words, master.silences));
