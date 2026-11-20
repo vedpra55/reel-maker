@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { PRESETS } from '../shared/presets';
 import { settingsSchema, type Settings, type SettingsInput } from '../shared/schema';
-import type { ReelPaths } from './paths';
+import { PROJECT_CONFIG, type ReelPaths } from './paths';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -30,16 +30,33 @@ export const parseOverride = (kv: string): Obj => {
   return keys.reduceRight<unknown>((acc, k) => ({ [k]: acc }), value) as Obj;
 };
 
-export const resolveSettings = (reelJson: SettingsInput = {}, overrides: Obj = {}): Settings => {
-  const presetName = (overrides.preset as string) ?? reelJson.preset ?? 'anyash-light';
+/**
+ * Resolution order (later wins):
+ *   schema defaults ← preset ← reel.config.json (project) ← reels/<name>/reel.json ← CLI flags
+ */
+export const resolveSettings = (reelJson: SettingsInput = {}, overrides: Obj = {}, project: SettingsInput = {}): Settings => {
+  const presetName = (overrides.preset as string) ?? reelJson.preset ?? project.preset ?? 'anyash-light';
   const preset = PRESETS[presetName];
   if (!preset) throw new Error(`Unknown preset "${presetName}". Available: ${Object.keys(PRESETS).join(', ')}`);
-  const merged = deepMerge(deepMerge(preset as Obj, reelJson as Obj), overrides);
+  const merged = deepMerge(deepMerge(deepMerge(preset as Obj, project as Obj), reelJson as Obj), overrides);
   merged.preset = presetName;
   return settingsSchema.parse(merged);
 };
 
-export const loadSettings = (p: ReelPaths, overrides: Obj = {}): Settings => {
-  const reelJson = fs.existsSync(p.settings) ? (JSON.parse(fs.readFileSync(p.settings, 'utf8')) as SettingsInput) : {};
-  return resolveSettings(reelJson, overrides);
+const readJsonFile = (file: string): SettingsInput => {
+  if (!fs.existsSync(file)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8')) as SettingsInput;
+  } catch (e) {
+    throw new Error(`${file} is not valid JSON: ${(e as Error).message}`);
+  }
 };
+
+/** project-wide defaults for every reel */
+export const loadProjectConfig = (): SettingsInput => readJsonFile(PROJECT_CONFIG);
+
+export const loadSettings = (p: ReelPaths, overrides: Obj = {}): Settings =>
+  resolveSettings(readJsonFile(p.settings), overrides, loadProjectConfig());
+
+/** settings without a reel (used by doctor) */
+export const loadProjectSettings = (): Settings => resolveSettings({}, {}, loadProjectConfig());

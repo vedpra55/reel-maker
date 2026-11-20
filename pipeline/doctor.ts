@@ -9,7 +9,8 @@ import readline from 'node:readline/promises';
 import { ensureBrowser } from '@remotion/renderer';
 import { FONTS_DIR, ROOT, SFX_DIR } from './paths';
 import { ensureSfx } from './synth';
-import { DEFAULT_MODEL, installWhisper, modelFile, whisperBinary } from './transcribe';
+import { loadProjectSettings } from './settings';
+import { MODEL_SIZE, installWhisper, modelFile, whisperBinary } from './transcribe';
 import { run, runLive, which } from './util/exec';
 import { FFMPEG, FFPROBE, listEncoders, listFilters } from './util/ffmpeg';
 import { color, log } from './util/log';
@@ -152,14 +153,15 @@ export const collectChecks = async (opts: { whisper: boolean }): Promise<Check[]
       required: true,
       fix: hasBrew ? { label: 'brew install git cmake', run: async () => (await runLive('brew', ['install', 'git', 'cmake'])) === 0 } : undefined,
     });
+    const name = loadProjectSettings().whisper.model; // from reel.config.json
     const bin = whisperBinary();
-    const model = fs.existsSync(modelFile());
+    const model = fs.existsSync(modelFile(name));
     checks.push({
-      name: `whisper.cpp + ${DEFAULT_MODEL} model`,
+      name: `whisper.cpp + ${name} model`,
       ok: !!bin && model,
-      detail: `${bin ? 'built' : 'not built'}, ${model ? 'model ready' : 'model not downloaded (~1.5 GB)'}  [${path.dirname(modelFile())}]`,
+      detail: `${bin ? 'built' : 'not built'}, ${model ? 'model ready' : `model not downloaded (~${MODEL_SIZE[name] ?? '?'})`}  [${path.dirname(modelFile(name))}]`,
       required: true,
-      fix: { label: `build whisper.cpp and download ${DEFAULT_MODEL}`, run: async () => (await installWhisper(), true) },
+      fix: { label: `build whisper.cpp and download ${name}`, run: async () => (await installWhisper(name), true) },
     });
   }
 

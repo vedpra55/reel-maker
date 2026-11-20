@@ -107,8 +107,8 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
       log.ok(`${pc.name}: ${raw.length} words from ${pc.name}.words.json`);
     } else {
       if (opts.noWhisper) throw new Error(`No ${pc.name}.words.json and --no-whisper was given`);
-      log.info(`${pc.name}: transcribing with whisper.cpp…`);
-      raw = cleanWords(await transcribeWords(pc.file16k, path.join(p.build, 'cache')));
+      log.info(`${pc.name}: transcribing with whisper.cpp (${s.whisper.model})…`);
+      raw = cleanWords(await transcribeWords(pc.file16k, path.join(p.build, 'cache'), s.whisper.model));
       usedWhisper = true;
       log.ok(`${pc.name}: ${raw.length} words`);
     }

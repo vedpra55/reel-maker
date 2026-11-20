@@ -12,7 +12,13 @@ import {
 import { TOOLS_DIR, WHISPER_DIR, WHISPER_VERSION } from './paths';
 import { normaliseWords, type RawWord } from './words';
 
-export const DEFAULT_MODEL: WhisperModel = (process.env.REEL_WHISPER_MODEL as WhisperModel) || 'medium.en';
+/** set in reel.config.json → { "whisper": { "model": "small.en" } } */
+export const DEFAULT_MODEL: WhisperModel = 'small.en';
+
+export const MODEL_SIZE: Record<string, string> = {
+  'tiny.en': '75 MB', tiny: '75 MB', 'base.en': '142 MB', base: '142 MB', 'small.en': '466 MB', small: '466 MB',
+  'medium.en': '1.5 GB', medium: '1.5 GB', 'large-v3-turbo': '1.6 GB',
+};
 export const MODELS_DIR = path.join(TOOLS_DIR, 'models');
 
 export const whisperBinary = () => {

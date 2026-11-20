@@ -14,6 +14,10 @@ import { zColor } from '@remotion/zod-types';
 export const TRANSITIONS = ['cut', 'fade', 'slide', 'wipe', 'zoom-punch', 'whip'] as const;
 export const WORD_ANIMS = ['pop', 'slide-up', 'blur-in', 'none'] as const;
 export const SFX_KINDS = ['whoosh', 'pop', 'tick', 'riser', 'hit'] as const;
+export const WHISPER_MODELS = [
+  'tiny.en', 'base.en', 'small.en', 'medium.en',
+  'tiny', 'base', 'small', 'medium', 'large-v3-turbo',
+] as const;
 
 /** an object whose missing keys fall back to their defaults (zod 4 `.default` does not parse) */
 const section = <T extends z.ZodRawShape>(shape: T) => {
@@ -129,6 +133,11 @@ export const settingsSchema = z.object({
       cta: z.string().default('Follow for more'),
       sub: z.string().default(''),
       bg: z.enum(['brand', 'dark', 'paper']).default('brand'),
+  }),
+
+  whisper: section({
+    /** smaller = faster download and transcription; *.en = English only (more accurate per size) */
+    model: z.enum(WHISPER_MODELS).default('small.en'),
   }),
 
   export: section({

@@ -197,5 +197,10 @@ describe('timeline', () => {
     expect(s.captions.maxWords).toBe(4);
     expect(s.intensity).toBe(0.9);
     expect(() => resolveSettings({ preset: 'nope' })).toThrow(/Unknown preset/);
+    // project config < reel.json < CLI
+    const p = resolveSettings({ whisper: { model: 'base.en' } }, {}, { whisper: { model: 'tiny.en' }, look: { brandLine: '@x' } });
+    expect(p.whisper.model).toBe('base.en');
+    expect(p.look.brandLine).toBe('@x');
+    expect(resolveSettings().whisper.model).toBe('small.en');
   });
 });

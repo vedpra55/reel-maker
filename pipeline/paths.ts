@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const REELS_DIR = process.env.REEL_HOME ? path.resolve(process.env.REEL_HOME) : path.join(ROOT, 'reels');
 export const ASSETS = path.join(ROOT, 'assets');
+/** project-wide settings applied to every reel (reel.json still wins) */
+export const PROJECT_CONFIG = path.join(ROOT, 'reel.config.json');
 export const FONTS_DIR = path.join(ASSETS, 'fonts');
 export const SFX_DIR = path.join(ASSETS, 'sfx');
 /** whisper.cpp + models live outside the repo so re-cloning doesn't re-download 1.5 GB */

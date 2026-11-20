@@ -32,7 +32,8 @@ The script does the following:
 2. Runs `npm install`.
 3. Links the `reel` command.
 4. Runs `reel doctor --fix`. That downloads Remotion's headless Chrome (about 100 MB), builds whisper.cpp with Metal
-   and downloads the `medium.en` model (about 1.5 GB, stored in `~/.reel-maker`).
+   and downloads the Whisper model set in `reel.config.json`. The default is `small.en` (about 466 MB), stored in
+   `~/.reel-maker`.
 
 Check your setup at any time:
 
@@ -181,8 +182,35 @@ Settings are resolved in this order, later ones winning:
 
 1. schema defaults
 2. preset
-3. `reels/<name>/reel.json`
-4. CLI `--set`
+3. `reel.config.json` in the project root: your defaults for every reel
+4. `reels/<name>/reel.json`: this reel only
+5. CLI `--set`
+
+`reel.config.json` is where project-wide choices go, such as the Whisper model, your brand line or your usual preset:
+
+```json
+{
+  "whisper": { "model": "small.en" },
+  "look": { "brandLine": "@anyash" }
+}
+```
+
+### Whisper model
+
+| Model | Download | Notes |
+|---|---|---|
+| `tiny.en` | ~75 MB | fastest; word timings drift noticeably |
+| `base.en` | ~142 MB | fast; OK for clear, slow voiceovers |
+| `small.en` (default) | ~466 MB | good balance |
+| `medium.en` | ~1.5 GB | most accurate English-only option |
+| `large-v3-turbo` | ~1.6 GB | multilingual |
+
+There are also multilingual versions without `.en`: `tiny`, `base`, `small` and `medium`.
+
+If you write `script.md`, the words on screen come from your script and Whisper only supplies timings,
+so a small model is usually enough.
+After changing the model, run `reel doctor --fix` to download it.
+Transcripts are cached per model.
 
 Your `reel.json` only needs what you change:
 
@@ -206,6 +234,7 @@ Your `reel.json` only needs what you change:
 | `look` | `grain` 0.04, `vignette` 0.3, `glow` 0.35, `scrim` 0.55, `imageTreatment`, `surface` (light \| dark), `grid`, `progressBar`, `brandLine`, `brandLineY` 0.73 |
 | `audio` | `lufs` -14, `tightenPauses`, `maxPauseMs` 450, `keepPauseMs` 300, `denoise`, `hookGapMs` 150, `sfx`, `sfxVolume` 0.1, `musicVolume` 0.12, `voiceVolume` 1 |
 | `endCard` | `enabled`, `durationS` 2, `cta`, `sub`, `bg` (brand \| dark \| paper) |
+| `whisper` | `model` (small.en) – see the table above |
 | `export` | `fps` 30, `crf` 20, `maxrate` 10M, `x264Preset` slow, `audioBitrate` 192k, `sizeCapMB` 30, `concurrency` 3, `draftScale` 0.5 |
 | `safeZone` | px kept clear of Instagram's UI: `top` 220, `bottom` 480, `sides` 70, `right` 150 |
 
