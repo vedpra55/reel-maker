@@ -20,7 +20,7 @@ import { PRESET_NAMES } from '../shared/presets';
 import { doctor } from '../pipeline/doctor';
 import { makeExample } from '../pipeline/example';
 import { finalize, writeReport } from '../pipeline/finalize';
-import { ROOT, REELS_DIR, ensureDir, findAudio, readJson, reelPaths, writeJson, type ReelPaths } from '../pipeline/paths';
+import { ROOT, REELS_DIR, ensureDir, findAudio, readJson, reelImages, reelPaths, writeJson, type ReelPaths } from '../pipeline/paths';
 import { writeActive } from '../pipeline/active';
 import { plan, type PlanReport } from '../pipeline/plan';
 import { prep } from '../pipeline/prep';
@@ -221,7 +221,7 @@ const needsPrep = (p: ReelPaths) => {
   const t = fs.statSync(p.prep).mtimeMs;
   const inputs = [findAudio(p.dir, 'voice'), findAudio(p.dir, 'hook'), findAudio(p.dir, 'music'), p.images, p.settings]
     .filter((x): x is string => !!x && fs.existsSync(x))
-    .concat(fs.existsSync(p.images) ? fs.readdirSync(p.images).map((f) => path.join(p.images, f)) : [])
+    .concat(reelImages(p))
     .concat(fs.readdirSync(p.dir).filter((f) => f.endsWith('.words.json')).map((f) => path.join(p.dir, f)));
   return inputs.some((f) => fs.statSync(f).mtimeMs > t);
 };

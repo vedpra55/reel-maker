@@ -60,6 +60,12 @@ export const listImages = (dir: string): string[] =>
         .map((f) => path.join(dir, f))
     : [];
 
+/** images/ first; images dropped straight into the reel folder also count */
+export const reelImages = (p: { dir: string; images: string }): string[] => {
+  const inFolder = listImages(p.images);
+  return inFolder.length ? inFolder : listImages(p.dir);
+};
+
 export const ensureDir = (d: string) => fs.mkdirSync(d, { recursive: true });
 
 export const readJson = <T,>(p: string): T => JSON.parse(fs.readFileSync(p, 'utf8')) as T;

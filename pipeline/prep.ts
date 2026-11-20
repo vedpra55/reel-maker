@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Settings } from '../shared/schema';
 import { masterVoice, processPiece, type Piece } from './audio';
-import { AUDIO_EXT, ensureDir, findAudio, listImages, readJson, writeJson, type ReelPaths } from './paths';
+import { AUDIO_EXT, ensureDir, findAudio, listImages, readJson, reelImages, writeJson, type ReelPaths } from './paths';
 import { generateScript } from './script';
 import { transcribeWords } from './transcribe';
 import { ffmpeg, probeImageSize, type Silence } from './util/ffmpeg';
@@ -36,7 +36,11 @@ const ingestImages = async (p: ReelPaths) => {
   ensureDir(p.pubImages);
   const sips = process.platform === 'darwin' ? which('sips') : null;
   const out: Prep['images'] = [];
-  for (const src of listImages(p.images)) {
+  const sources = reelImages(p);
+  if (sources.length && !listImages(p.images).length) {
+    log.info(`using ${sources.length} image(s) from the reel folder (tip: keep them in images/)`);
+  }
+  for (const src of sources) {
     const name = imageName(src);
     const keepPng = path.extname(src).toLowerCase() === '.png';
     const dst = path.join(p.pubImages, `${name}${keepPng ? '.png' : '.jpg'}`);
@@ -78,7 +82,8 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
 
   log.step('Images');
   const images = await ingestImages(p);
-  log.ok(images.length ? `${images.length} image(s): ${images.map((i) => i.name).join(', ')}` : 'no images – text beats only');
+  if (images.length) log.ok(`${images.length} image(s): ${images.map((i) => i.name).join(', ')}`);
+  else log.warn(`no images found in ${path.relative(process.cwd(), p.images)}/ – text beats only`);
 
   log.step('Audio');
   const voiceSrc = findAudio(p.dir, 'voice');

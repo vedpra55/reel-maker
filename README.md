@@ -60,6 +60,7 @@ reel new london-dentist
 #   voice.m4a        your voiceover (m4a / mp3 / wav / anything ffmpeg reads)
 #   hook.m4a         optional – a separately recorded hook, played first
 #   images/          01-bigben.jpg, 02-clinic.heic …   (filename order = default order)
+#                    (images dropped loose in the reel folder also work)
 #   music.mp3        optional – automatically ducked under the voice
 reel prep london-dentist      # clean audio, transcribe, write script.md
 reel render london-dentist    # → reels/london-dentist/out/reel.mp4
