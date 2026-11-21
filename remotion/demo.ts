@@ -15,7 +15,7 @@ const shot = (id: number, startMs: number, endMs: number, motion: TShot['motion'
 const say = 'This is how every image moves and every word shows up in your reel'.split(' ');
 
 export const demoTimeline: Timeline = {
-  version: 2,
+  version: 3,
   name: 'demo',
   durationMs: 8000,
   voice: { src: '', durationMs: 8000 },

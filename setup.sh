@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-time setup on a Mac:  ./setup.sh
-#   Homebrew packages (node, ffmpeg, cmake) → npm install → `reel` command → reel doctor --fix
+#   Homebrew packages (node, ffmpeg) → npm install → reel doctor --fix
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -18,21 +18,17 @@ if [[ "$(uname)" == "Darwin" ]]; then
     missing+=(node)
   fi
   command -v ffmpeg >/dev/null 2>&1 || missing+=(ffmpeg)
-  command -v cmake >/dev/null 2>&1 || missing+=(cmake)
   if ((${#missing[@]})); then
     say "Missing: ${missing[*]}"
     read -r -p "  Install with Homebrew? [y/N] " ok
     if [[ "$ok" =~ ^[Yy] ]]; then brew install "${missing[@]}"; else echo "  Skipped – reel doctor will list them again."; fi
   fi
 else
-  echo "Not macOS – install node ≥ 20, ffmpeg and cmake with your package manager."
+  echo "Not macOS – install node ≥ 20 and ffmpeg with your package manager."
 fi
 
 say "Installing project packages"
 npm install --no-audit --no-fund
-
-say "Linking the reel command"
-if npm link >/dev/null 2>&1; then echo "  you can now run: reel …"; else echo "  couldn't link globally – use ./reel …"; fi
 
 say "Checking everything (reel doctor --fix)"
 ./reel doctor --fix

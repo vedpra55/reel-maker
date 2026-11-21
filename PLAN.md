@@ -1,11 +1,8 @@
 # Reel Maker — Build Plan (v1)
 
-> **v2 (current): simplified after the first real reel.** Text, stat and split screens, the end card, the
-> styled captions (stacked, serif, bars) and the presets are removed. What's left:
-> - images edge to edge with camera motion, and transitions where both images move
-> - plain word-by-word captions (`word` / `phrase` / `off`)
-> - script.md = one line per image with its time in the original voice file
-> README.md describes the current behaviour. The plan below is kept for history.
+> **v3 (current):** one input file per reel, `timeline.json`, with `hook` and `voice` sections (times read off each
+> audio file), `text` per shot for captions, and per-shot `sfx`. Removed: script.md, Whisper, reel.json and the
+> prep/plan commands. Sound effects are on by default. README.md describes the current behaviour.
 
 > **Status: v1 built.** See README.md for usage. Differences from this plan, decided during the build:
 > - Fonts are Montserrat (light, heavy, heavy italic), Playfair Display Italic and Instrument Serif Italic,

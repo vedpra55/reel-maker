@@ -62,13 +62,13 @@ export const writeReport = (
     `duration: ${(tl.durationMs / 1000).toFixed(1)}s   images: ${tl.shots.length}   words: ${tl.words.length}   captions: ${st.captions.mode}`,
   ];
   if (plan) {
-    if (plan.auto) lines.push('script.md had no image lines – images were spread automatically');
-    if (plan.unusedImages.length) lines.push(`not used: ${plan.unusedImages.join(', ')}`);
+    if (plan.unusedImages.length) lines.push(`images not used: ${plan.unusedImages.join(', ')}`);
+    lines.push(`sound effects: ${plan.sfx}`);
     for (const w of plan.warnings) lines.push(`warning: ${w}`);
   }
   if (data.sizeMB !== undefined) lines.push(`file: ${data.sizeMB.toFixed(1)} MB`);
   if (data.renderS !== undefined) lines.push(`render time: ${data.renderS.toFixed(0)}s`);
-  lines.push('', 'shots (times in the finished reel):');
+  lines.push('', 'shots (times in the finished video, after silences were removed):');
   for (const sh of tl.shots) {
     lines.push(
       `  ${(sh.startMs / 1000).toFixed(2).padStart(6)}s – ${(sh.endMs / 1000).toFixed(2).padStart(6)}s  ${path.basename(sh.src).padEnd(22)} ${sh.motion.padEnd(9)} in: ${sh.transition}`,

@@ -2,7 +2,7 @@
   "name": "reel-maker",
   "version": "1.0.0",
   "private": true,
-  "description": "Rules-based Instagram reel generator: voice + images in, polished 1080x1920 reel out. Remotion + ffmpeg + whisper.cpp.",
+  "description": "Instagram reel maker: voice + images + timeline.json in, 1080x1920 reel out (images with motion, word-by-word captions, sound effects). Remotion + ffmpeg.",
   "type": "module",
   "bin": {
     "reel": "./bin/reel.sh"
@@ -19,10 +19,8 @@
   },
   "dependencies": {
     "@remotion/bundler": "^4.0.545",
-    "@remotion/captions": "^4.0.545",
     "@remotion/cli": "^4.0.545",
     "@remotion/fonts": "^4.0.545",
-    "@remotion/install-whisper-cpp": "^4.0.545",
     "@remotion/renderer": "^4.0.545",
     "@remotion/zod-types": "^4.0.545",
     "commander": "^15.1.0",

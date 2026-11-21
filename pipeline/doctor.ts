@@ -1,6 +1,6 @@
 /**
  * `reel doctor [--fix] [--yes]`: checks everything the pipeline needs on a Mac and
- * offers to install what's missing (brew, Remotion's Chrome, whisper.cpp + model).
+ * offers to install what's missing (ffmpeg via Homebrew, Remotion's headless Chrome).
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,8 +9,6 @@ import readline from 'node:readline/promises';
 import { ensureBrowser } from '@remotion/renderer';
 import { FONTS_DIR, ROOT, SFX_DIR } from './paths';
 import { ensureSfx } from './synth';
-import { loadProjectSettings } from './settings';
-import { MODEL_SIZE, installWhisper, modelFile, whisperBinary } from './transcribe';
 import { run, runLive, which } from './util/exec';
 import { FFMPEG, FFPROBE, listEncoders, listFilters } from './util/ffmpeg';
 import { color, log } from './util/log';
@@ -43,7 +41,7 @@ const freeDiskGB = async (dir: string) => {
   return Number.isFinite(kb) ? kb / 1024 / 1024 : NaN;
 };
 
-export const collectChecks = async (opts: { whisper: boolean }): Promise<Check[]> => {
+export const collectChecks = async (): Promise<Check[]> => {
   const checks: Check[] = [];
   const hasBrew = !!which('brew');
 
@@ -67,21 +65,6 @@ export const collectChecks = async (opts: { whisper: boolean }): Promise<Check[]
 
   // toolchain
   if (isMac) {
-    const xc = await run('xcode-select', ['-p']);
-    checks.push({
-      name: 'Xcode command line tools',
-      ok: xc.code === 0,
-      detail: xc.code === 0 ? xc.stdout.trim() : 'missing (needed to build whisper.cpp)',
-      required: opts.whisper,
-      fix: {
-        label: 'xcode-select --install (opens an installer window)',
-        // the installer finishes in its own window, so report "not done yet"
-        run: async () => {
-          await runLive('xcode-select', ['--install']);
-          return false;
-        },
-      },
-    });
     checks.push({
       name: 'Homebrew',
       ok: hasBrew,
@@ -142,29 +125,6 @@ export const collectChecks = async (opts: { whisper: boolean }): Promise<Check[]
     },
   });
 
-  // whisper
-  if (opts.whisper) {
-    const hasGit = !!which('git');
-    const hasCmake = !!which('cmake');
-    checks.push({
-      name: 'git + cmake (whisper.cpp build)',
-      ok: hasGit && hasCmake,
-      detail: `${hasGit ? 'git ✓' : 'git missing'}, ${hasCmake ? 'cmake ✓' : 'cmake missing'}`,
-      required: true,
-      fix: hasBrew ? { label: 'brew install git cmake', run: async () => (await runLive('brew', ['install', 'git', 'cmake'])) === 0 } : undefined,
-    });
-    const name = loadProjectSettings().whisper.model; // from reel.config.json
-    const bin = whisperBinary();
-    const model = fs.existsSync(modelFile(name));
-    checks.push({
-      name: `whisper.cpp + ${name} model`,
-      ok: !!bin && model,
-      detail: `${bin ? 'built' : 'not built'}, ${model ? 'model ready' : `model not downloaded (~${MODEL_SIZE[name] ?? '?'})`}  [${path.dirname(modelFile(name))}]`,
-      required: true,
-      fix: { label: `build whisper.cpp and download ${name}`, run: async () => (await installWhisper(name), true) },
-    });
-  }
-
   // bundled assets
   const fonts = fs.existsSync(FONTS_DIR) ? fs.readdirSync(FONTS_DIR).filter((f) => f.endsWith('.woff2')) : [];
   checks.push({ name: 'Bundled fonts', ok: fonts.length >= 5, detail: `${fonts.length} files in assets/fonts`, required: true });
@@ -174,9 +134,9 @@ export const collectChecks = async (opts: { whisper: boolean }): Promise<Check[]
   return checks;
 };
 
-export const doctor = async (opts: { fix: boolean; yes: boolean; whisper: boolean }) => {
+export const doctor = async (opts: { fix: boolean; yes: boolean }) => {
   log.step('Checking your setup');
-  let checks = await collectChecks(opts);
+  let checks = await collectChecks();
   const print = (cs: Check[]) => {
     for (const c of cs) {
       const mark = c.ok ? color.green('✓') : c.required ? color.red('✗') : color.yellow('!');
@@ -198,12 +158,12 @@ export const doctor = async (opts: { fix: boolean; yes: boolean; whisper: boolea
       }
     }
     log.step('After fixes');
-    checks = await collectChecks(opts);
+    checks = await collectChecks();
     print(checks);
   } else if (broken.length) {
     console.log(`\n  Run ${color.bold('reel doctor --fix')} to install what's missing.`);
   }
   const blocking = checks.filter((c) => !c.ok && c.required);
-  console.log(blocking.length ? `\n  ${color.red(`${blocking.length} required item(s) missing.`)}` : `\n  ${color.green('All set.')} Try: reel example && reel make example`);
+  console.log(blocking.length ? `\n  ${color.red(`${blocking.length} required item(s) missing.`)}` : `\n  ${color.green('All set.')} Try: ./reel example && ./reel make example`);
   return blocking.length === 0;
 };

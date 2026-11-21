@@ -10,8 +10,6 @@ export type Piece = {
   src: string;
   /** cleaned + tightened, 48 kHz mono */
   file: string;
-  /** 16 kHz mono copy for whisper */
-  file16k: string;
   cutMap: CutMap;
   originalMs: number;
   durationMs: number;
@@ -35,7 +33,6 @@ const selectExpr = (map: CutMap) =>
 export const processPiece = async (name: Piece['name'], src: string, workDir: string, s: Settings): Promise<Piece> => {
   const stage1 = path.join(workDir, `${name}.clean.wav`);
   const file = path.join(workDir, `${name}.tight.wav`);
-  const file16k = path.join(workDir, `${name}.16k.wav`);
   await ffmpeg(['-i', src, '-vn', '-ac', '1', '-af', cleanChain(s), '-ar', '48000', '-c:a', 'pcm_s16le', stage1]);
   const originalMs = await probeDurationMs(stage1);
 
@@ -49,14 +46,13 @@ export const processPiece = async (name: Piece['name'], src: string, workDir: st
   } else {
     await ffmpeg(['-i', stage1, '-af', `aselect='${selectExpr(cutMap)}',asetpts=N/SR/TB`, '-c:a', 'pcm_s16le', file]);
   }
-  await ffmpeg(['-i', file, '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', file16k]);
   const durationMs = await probeDurationMs(file);
   // sanity: kept length should match the rendered length
   const expected = keptDuration(cutMap);
   if (Math.abs(expected - durationMs) > 80) {
     console.warn(`  ! ${name}: tightened length ${durationMs} ms differs from cut map ${Math.round(expected)} ms`);
   }
-  return { name, src, file, file16k, cutMap, originalMs, durationMs };
+  return { name, src, file, cutMap, originalMs, durationMs };
 };
 
 /** hook + gap + voice → loudness-normalised master voice track */

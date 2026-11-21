@@ -37,8 +37,9 @@ export const AudioMix: React.FC<{ timeline: Timeline; settings: Settings }> = ({
         <Audio src={staticFile(tl.music.src)} loop volume={(f) => musicCurve[Math.min(musicCurve.length - 1, Math.max(0, f))]} />
       ) : null}
       {tl.sfx.map((fx, i) => (
-        <Sequence key={i} from={msToFrame(fx.atMs, fps)} durationInFrames={Math.round(fps * 1.4)} layout="none" name={`sfx ${fx.kind}`}>
-          <Audio src={staticFile(`sfx/${fx.kind}.wav`)} volume={fx.volume} />
+        // runs to the end of the reel so long sounds (your own files) are never cut short
+        <Sequence key={i} from={msToFrame(fx.atMs, fps)} durationInFrames={Math.max(1, durationInFrames - msToFrame(fx.atMs, fps))} layout="none" name={fx.src}>
+          <Audio src={staticFile(fx.src)} volume={fx.volume} />
         </Sequence>
       ))}
     </>

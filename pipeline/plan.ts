@@ -1,28 +1,17 @@
-/** `reel plan`: prep.json + script.md + settings → timeline.json (deterministic, instant, re-runnable). */
-import fs from 'node:fs';
-import path from 'node:path';
-import { timelineSchema, type Settings, type TShot, type TSfx, type TWord, type Timeline } from '../shared/schema';
+/** timeline.json + prep + settings → the render plan (.build/timeline.json). Instant and deterministic. */
+import { SFX_KINDS, timelineSchema, type Settings, type TShot, type TSfx, type TWord, type Timeline } from '../shared/schema';
+import type { InShot, Input, Section } from './input';
 import { toFinal, type Prep } from './prep';
-import { readJson, writeJson, type ReelPaths } from './paths';
-import { parseScript, spreadTimes, type ImageLine } from './script';
-import { log } from './util/log';
-import { isGeneratedTimeline, parseUserTimeline, type UserTimeline } from './usertimeline';
-import { timeTextBlocks } from './textwords';
+import { speechIn, timeTextBlocks } from './textwords';
 import { createRng, hashString } from './util/rng';
 
 export type PlanReport = {
   shots: number;
   warnings: string[];
   unusedImages: string[];
-  auto: boolean;
-  captionSource: 'words' | 'script' | 'whisper';
-  input: 'timeline.json' | 'script.md';
-};
-
-/** where the voice actually starts (end of the leading silence) */
-const firstSpeech = (prep: Prep) => {
-  const lead = prep.silences.find(([s]) => s <= 1);
-  return lead ? lead[1] : 0;
+  /** where the captions of each section come from */
+  captions: Partial<Record<Section, 'words' | 'text' | 'none'>>;
+  sfx: number;
 };
 
 type Asset = { name: string; src: string };
@@ -52,92 +41,82 @@ export const applyReplacements = (words: TWord[], map: Record<string, string>): 
 
 /** next item of a rotation, never the same as the previous pick */
 const rotate = <T,>(list: readonly T[], index: number, prev: T | undefined): T => {
-  if (!list.length) throw new Error('empty list');
   let v = list[index % list.length];
   if (v === prev && list.length > 1) v = list[(index + 1) % list.length];
   return v;
 };
 
-export const buildTimeline = (
-  name: string,
-  prep: Prep,
-  scriptSrc: string | null,
-  s: Settings,
-  /** parsed reels/<name>/timeline.json – used instead of script.md when given */
-  userTimeline?: unknown,
-): { timeline: Timeline; report: PlanReport } => {
-  if (prep.version !== 2) throw new Error('This reel was prepared by an older version – run "reel prep <name>" again.');
-  const warnings: string[] = [];
-  const parsed: UserTimeline =
-    userTimeline !== undefined
-      ? parseUserTimeline(userTimeline)
-      : { ...(scriptSrc ? parseScript(scriptSrc) : { lines: [], warnings: [], hasText: false }), words: null };
-  warnings.push(...parsed.warnings);
+const ANIMATED = new Set(['push', 'push-up', 'zoom', 'whip', 'slide-up']);
+const GAIN: Record<string, number> = { whoosh: 1, pop: 0.8, tick: 0.6, riser: 0.8, hit: 1 };
 
-  // captions: exact word times you gave > your text timed from the audio > the transcript
-  let source: TWord[];
-  let captionSource: PlanReport['captionSource'] = 'whisper';
-  if (parsed.words?.length) {
-    captionSource = 'words';
-    source = parsed.words
-      .map((w) => {
-        const a = toFinal(w.piece, w.startMs, prep.pieces);
-        const b = toFinal(w.piece, w.endMs, prep.pieces);
-        return a === null || b === null ? null : { text: w.text, startMs: a, endMs: Math.max(b, a + 40) };
-      })
-      .filter((w): w is TWord => w !== null)
-      .sort((a, b) => a.startMs - b.startMs);
-  } else if (parsed.hasText) {
-    captionSource = 'script';
-    const textLines = parsed.lines
-      .filter((l) => l.text)
-      .map((l) => ({ l, at: toFinal(l.piece, l.timeMs, prep.pieces) }))
-      .filter((x): x is { l: ImageLine; at: number } => x.at !== null)
-      .sort((a, b) => a.at - b.at);
-    const blocks = textLines.map(({ l, at }, i) => ({
-      startMs: i === 0 ? Math.min(at, firstSpeech(prep)) : at,
-      endMs: textLines[i + 1]?.at ?? prep.voice.durationMs,
-      text: l.text!,
-    }));
-    source = timeTextBlocks(blocks, prep.silences);
-  } else {
-    source = prep.words.map((w) => ({ text: w.text, startMs: w.startMs, endMs: w.endMs }));
-    if (!source.length) warnings.push('no words for captions – add your text ("> …" lines in script.md, or "text" in timeline.json), or run reel prep with whisper');
-  }
-  const words: TWord[] = applyReplacements(source, s.captions.replace);
-  const lastWordEnd = words.length ? words[words.length - 1].endMs : prep.voice.durationMs;
-  let durationMs = Math.min(prep.voice.durationMs + s.audio.tailMs, lastWordEnd + s.audio.tailMs);
-  if (!prep.images.length) throw new Error('No images. Put them in images/ (or the reel folder) and run reel prep again.');
+export const buildTimeline = (name: string, prep: Prep, input: Input, s: Settings): { timeline: Timeline; report: PlanReport } => {
+  if (prep.version !== 3) throw new Error('This reel was prepared by an older version – delete its .build folder and run reel make again.');
+  if (!prep.images.length) throw new Error('No images. Put them in the images/ folder.');
+  const warnings: string[] = [...input.warnings];
+  const piece = (sec: Section) => prep.pieces.find((p) => p.name === sec);
 
-  /* ---------- which image when ---------- */
-  type Cut = { atMs: number; asset: Asset; line?: ImageLine };
-  let cuts: Cut[] = [];
-  const auto = parsed.lines.length === 0;
-  if (auto) {
-    // no script lines: spread the images evenly in filename order
-    spreadTimes(words, prep.images.length, lastWordEnd).forEach((t, i) => cuts.push({ atMs: t, asset: prep.images[i] }));
-  } else {
-    for (const line of parsed.lines) {
-      const asset = resolveImage(line.image, prep.images);
-      if (!asset) {
-        warnings.push(`line ${line.line}: no image matches "${line.image}" (have: ${prep.images.map((i) => i.name).join(', ')})`);
-        continue;
+  // shots in sections without their audio file can't be placed
+  const shotsIn = input.shots.filter((sh) => {
+    if (piece(sh.section)) return true;
+    warnings.push(`${sh.label}: there is no ${sh.section} audio file (${sh.section}.mp3) – shot skipped`);
+    return false;
+  });
+  if (!shotsIn.length) throw new Error('timeline.json has no usable shots.');
+
+  /* ---------- captions ---------- */
+  const captions: PlanReport['captions'] = {};
+  let words: TWord[] = [];
+  for (const sec of ['hook', 'voice'] as const) {
+    const pc = piece(sec);
+    if (!pc) continue;
+    const secEnd = pc.offsetMs + pc.durationMs;
+    const given = input.words[sec];
+    if (given?.length) {
+      captions[sec] = 'words';
+      for (const w of given) {
+        const a = toFinal(sec, w.startMs, prep.pieces)!;
+        const b = toFinal(sec, w.endMs, prep.pieces)!;
+        words.push({ text: w.text, startMs: a, endMs: Math.max(b, a + 40) });
       }
-      const at = toFinal(line.piece, line.timeMs, prep.pieces);
-      if (at === null) {
-        warnings.push(`line ${line.line}: "hook" time given but there is no hook audio file`);
-        continue;
-      }
-      cuts.push({ atMs: at, asset, line });
-      if (line.endMs !== undefined) {
-        const end = toFinal(line.piece, line.endMs, prep.pieces);
-        if (end !== null && line === parsed.lines[parsed.lines.length - 1]) durationMs = Math.max(durationMs, end);
-      }
+      continue;
     }
-    if (!cuts.length) throw new Error(`${userTimeline !== undefined ? 'timeline.json' : 'script.md'} has no usable image lines.`);
+    const withText = shotsIn
+      .filter((sh) => sh.section === sec && sh.text)
+      .map((sh) => ({ sh, at: toFinal(sec, sh.timeMs, prep.pieces)! }))
+      .sort((a, b) => a.at - b.at);
+    if (!withText.length) {
+      captions[sec] = 'none';
+      continue;
+    }
+    captions[sec] = 'text';
+    const firstSpeech = speechIn(pc.offsetMs, secEnd, prep.silences)[0]?.[0] ?? pc.offsetMs;
+    const blocks = withText.map(({ sh, at }, i) => ({
+      startMs: i === 0 ? Math.min(at, firstSpeech) : at,
+      endMs: withText[i + 1]?.at ?? secEnd,
+      text: sh.text!,
+    }));
+    words.push(...timeTextBlocks(blocks, prep.silences));
   }
+  words.sort((a, b) => a.startMs - b.startMs);
+  words = applyReplacements(words, s.captions.replace);
+  if (!words.length) warnings.push('no captions: add "text" to your shots to show words on screen');
 
-  // order, snap onto word starts, first image from frame 0
+  const lastSpeech = words.length ? words[words.length - 1].endMs : prep.voice.durationMs;
+  let durationMs = Math.min(prep.voice.durationMs, lastSpeech) + s.audio.tailMs;
+
+  /* ---------- cuts ---------- */
+  type Cut = { atMs: number; asset: Asset; sh: InShot };
+  let cuts: Cut[] = [];
+  for (const sh of shotsIn) {
+    const asset = resolveImage(sh.image, prep.images);
+    if (!asset) {
+      warnings.push(`${sh.label}: image "${sh.image}" not found – you have ${prep.images.map((i) => i.name).join(', ')}`);
+      continue;
+    }
+    cuts.push({ atMs: toFinal(sh.section, sh.timeMs, prep.pieces)!, asset, sh });
+    if (sh.endMs !== undefined) durationMs = Math.max(durationMs, toFinal(sh.section, sh.endMs, prep.pieces)!);
+  }
+  if (!cuts.length) throw new Error('None of the images in timeline.json were found in images/.');
   cuts.sort((a, b) => a.atMs - b.atMs);
   const starts = words.map((w) => w.startMs);
   for (const c of cuts) {
@@ -147,9 +126,13 @@ export const buildTimeline = (
   }
   cuts[0].atMs = 0;
   cuts = cuts.filter((c, i) => {
+    if (c.atMs >= durationMs) {
+      warnings.push(`${c.sh.label}: its time is after the audio ends – skipped`);
+      return false;
+    }
     const dup = i > 0 && c.atMs - cuts[i - 1].atMs < 200;
-    if (dup) warnings.push(`"${c.asset.name}" comes less than 0.2s after "${cuts[i - 1].asset.name}" – dropped`);
-    return !dup && c.atMs < durationMs;
+    if (dup) warnings.push(`${c.sh.label}: less than 0.2s after the previous image – skipped`);
+    return !dup;
   });
 
   /* ---------- shots ---------- */
@@ -160,14 +143,13 @@ export const buildTimeline = (
   cuts.forEach((c, i) => {
     const endMs = i + 1 < cuts.length ? cuts[i + 1].atMs : durationMs;
     const prev = shots[i - 1];
-    const motion = c.line?.motion ?? rotate(s.images.motions, motionOffset + i, prev?.motion);
-    let transition = c.line?.transition ?? (s.images.transitions.length ? rotate(s.images.transitions, transOffset + i, prev?.transition) : 'cut');
-    // a transition needs room on both sides of the cut
+    const motion = c.sh.motion ?? rotate(s.images.motions, motionOffset + i, prev?.motion);
+    let transition = c.sh.transition ?? (s.images.transitions.length ? rotate(s.images.transitions, transOffset + i, prev?.transition) : 'cut');
     const room = Math.min(c.atMs - (prev?.startMs ?? 0), endMs - c.atMs);
     if (i === 0) transition = 'cut';
     else if (transition !== 'cut' && room < s.images.transitionMs + 150) {
-      if (!c.line?.transition) transition = 'cut';
-      else warnings.push(`line ${c.line.line}: shot too short for a ${transition} – it will look rushed`);
+      if (!c.sh.transition) transition = 'cut';
+      else warnings.push(`${c.sh.label}: very short shot – the ${transition} will look rushed`);
     }
     shots.push({
       id: i,
@@ -175,36 +157,67 @@ export const buildTimeline = (
       endMs: Math.round(endMs),
       src: c.asset.src,
       motion,
-      focus: c.line?.focus ?? 'center',
-      treatment: c.line?.treatment ?? s.images.treatment,
+      focus: c.sh.focus ?? 'center',
+      treatment: c.sh.treatment ?? s.images.treatment,
       transition,
     });
   });
-
   const used = new Set(shots.map((x) => x.src));
   const unusedImages = prep.images.filter((i) => !used.has(i.src)).map((i) => i.name);
 
-  /* ---------- sfx & ducking ---------- */
+  /* ---------- sound effects ---------- */
   const sfx: TSfx[] = [];
-  if (s.audio.whoosh) {
-    let last = -Infinity;
-    for (const sh of shots) {
-      if (sh.id === 0 || sh.transition === 'cut' || sh.transition === 'crossfade') continue;
-      const at = Math.max(0, sh.startMs - s.images.transitionMs / 2 - 60);
-      if (at - last < 800) continue;
-      sfx.push({ kind: 'whoosh', atMs: Math.round(at), volume: s.audio.sfxVolume });
-      last = at;
-    }
+  if (s.audio.sfxVolume > 0) {
+    let lastAuto = -Infinity;
+    cuts.forEach((c, i) => {
+      const sh = shots[i];
+      const choice = c.sh.sfx;
+      if (choice === 'none') return;
+      let src: string | null = null;
+      let kind = '';
+      let vol = 1;
+      if (choice) {
+        vol = choice.volume;
+        const base = choice.name.toLowerCase().replace(/\.wav$/, '');
+        if ((SFX_KINDS as readonly string[]).includes(base)) {
+          kind = base;
+          src = `sfx/${base}.wav`;
+        } else {
+          const file = prep.sfx.find((f) => f.toLowerCase() === choice.name.toLowerCase()) ??
+            prep.sfx.find((f) => f.toLowerCase().replace(/\.[a-z0-9]+$/, '') === choice.name.toLowerCase());
+          if (!file) {
+            warnings.push(
+              `${c.sh.label}: sound "${choice.name}" not found – use ${SFX_KINDS.join(', ')}, or put the file in the reel's sfx/ folder`,
+            );
+            return;
+          }
+          src = `sfx-user/${file}`;
+        }
+      } else if (s.audio.autoWhoosh && i > 0 && ANIMATED.has(sh.transition)) {
+        if (sh.startMs - lastAuto < 700) return;
+        kind = 'whoosh';
+        src = 'sfx/whoosh.wav';
+        lastAuto = sh.startMs;
+      }
+      if (!src) return;
+      // whoosh peaks on the cut, a riser ends on it, everything else hits on it
+      const at =
+        kind === 'whoosh' ? sh.startMs - s.images.transitionMs / 2 - 60 : kind === 'riser' ? sh.startMs - 1150 : sh.startMs;
+      sfx.push({ src, atMs: Math.max(0, Math.round(at)), volume: +(s.audio.sfxVolume * vol * (GAIN[kind] ?? 1)).toFixed(3) });
+    });
   }
+
+  /* ---------- speech regions (music ducking) ---------- */
   const speech: [number, number][] = [];
-  for (const w of words) {
-    const lastR = speech[speech.length - 1];
-    if (lastR && w.startMs - lastR[1] < 350) lastR[1] = w.endMs;
-    else speech.push([w.startMs, w.endMs]);
+  const regions = words.length ? words.map((w) => [w.startMs, w.endMs] as [number, number]) : speechIn(0, prep.voice.durationMs, prep.silences);
+  for (const [a, b] of regions) {
+    const last = speech[speech.length - 1];
+    if (last && a - last[1] < 350) last[1] = b;
+    else speech.push([a, b]);
   }
 
   const timeline = timelineSchema.parse({
-    version: 2,
+    version: 3,
     name,
     durationMs: Math.round(durationMs),
     voice: prep.voice,
@@ -214,34 +227,5 @@ export const buildTimeline = (
     words,
     sfx,
   });
-  return { timeline, report: { shots: shots.length, warnings, unusedImages, auto, captionSource, input: userTimeline !== undefined ? 'timeline.json' : 'script.md' } };
-};
-
-/** reels/<name>/timeline.json if you wrote one (an old auto-generated one there is moved out of the way) */
-export const readUserTimeline = (p: ReelPaths): { data: unknown; note?: string } | null => {
-  if (!fs.existsSync(p.userTimeline)) return null;
-  let data: unknown;
-  try {
-    data = JSON.parse(fs.readFileSync(p.userTimeline, 'utf8'));
-  } catch (e) {
-    throw new Error(`timeline.json is not valid JSON: ${(e as Error).message}`);
-  }
-  if (isGeneratedTimeline(data)) {
-    fs.mkdirSync(p.build, { recursive: true });
-    fs.renameSync(p.userTimeline, path.join(p.build, 'timeline.old.json'));
-    log.info('(Tidied up an old file left by the previous version – nothing for you to do.)');
-    return null;
-  }
-  return { data };
-};
-
-export const plan = (p: ReelPaths, s: Settings) => {
-  if (!fs.existsSync(p.prep)) throw new Error(`Run "reel prep ${p.name}" first.`);
-  const prep = readJson<Prep>(p.prep);
-  const user = readUserTimeline(p);
-  const script = fs.existsSync(p.script) ? fs.readFileSync(p.script, 'utf8') : null;
-  const res = user ? buildTimeline(p.name, prep, null, s, user.data) : buildTimeline(p.name, prep, script, s);
-  if (user && script && parseScript(script).lines.length) res.report.warnings.unshift('both timeline.json and script.md found – using timeline.json');
-  writeJson(p.timeline, res.timeline);
-  return res;
+  return { timeline, report: { shots: shots.length, warnings, unusedImages, captions, sfx: sfx.length } };
 };

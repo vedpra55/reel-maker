@@ -1,38 +1,37 @@
 /**
- * `reel prep`: everything expensive, done once per input change.
- *   images → public/images (resized), audio → public/voice.wav, words with final timings → prep.json,
- *   script.md generated from the transcript if you didn't write one.
+ * Prep: the slow part, redone only when audio, images or audio settings change.
+ *   images → public/images (resized) · hook + voice → cleaned, tightened, joined public/voice.wav
+ *   your sfx/ files → public/sfx-user · pauses + time maps → .build/prep.json
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Settings } from '../shared/schema';
 import { masterVoice, processPiece, type Piece } from './audio';
-import { AUDIO_EXT, ensureDir, findAudio, listImages, readJson, reelImages, writeJson, type ReelPaths } from './paths';
-import { hasOwnCaptions } from './usertimeline';
-import { generateScript } from './script';
-import { transcribeWords } from './transcribe';
+import { AUDIO_EXT, ensureDir, findAudio, listImages, reelImages, writeJson, type ReelPaths } from './paths';
 import { ffmpeg, probeImageSize, type Silence } from './util/ffmpeg';
 import { which } from './util/exec';
 import { log } from './util/log';
-import { applyCutMap, cleanWords, fixTimings, mapTime, normaliseWords, snapToSilences, unmapTime, type CutMap, type RawWord } from './words';
-
-export type PrepWord = RawWord & { section: 'hook' | 'body' };
+import { mapTime, unmapTime, type CutMap } from './words';
 
 /** where each recording sits in the master track, and what pause-tightening removed from it */
 export type PrepPiece = { name: 'hook' | 'voice'; offsetMs: number; durationMs: number; originalMs: number; cutMap: CutMap };
 
 export type Prep = {
-  version: 2;
+  version: 3;
   voice: { src: string; durationMs: number };
   pieces: PrepPiece[];
-  words: PrepWord[];
-  /** whisper was skipped because the reel brings its own captions */
-  ownCaptions: boolean;
+  /** pauses in the joined voice track (final clock) */
   silences: Silence[];
   images: { name: string; src: string; w: number; h: number }[];
+  /** your own sound files from the reel's sfx/ folder (file names) */
+  sfx: string[];
   music: { src: string } | null;
-  stats: { inputLufs: number; removedMs: number; whisper: boolean };
+  /** audio settings this prep was made with – a change means prep must run again */
+  audioKey: string;
+  stats: { inputLufs: number; removedMs: number };
 };
+
+export const audioKeyOf = (s: Settings) => JSON.stringify(s.audio);
 
 const MAX_EDGE = 2160;
 export const imageName = (file: string) => path.basename(file, path.extname(file)).trim().replace(/\s+/g, '-');
@@ -71,16 +70,19 @@ const ingestImages = async (p: ReelPaths) => {
   return out;
 };
 
-/** <piece>.words.json next to the audio skips whisper for that piece */
-const suppliedWords = (dir: string, base: string): RawWord[] | null => {
-  for (const f of [`${base}.words.json`, ...(base === 'voice' ? ['words.json'] : [])]) {
-    const file = path.join(dir, f);
-    if (fs.existsSync(file)) return normaliseWords(readJson(file));
-  }
-  return null;
+
+const copyUserSfx = (p: ReelPaths): string[] => {
+  const src = path.join(p.dir, 'sfx');
+  const dst = path.join(p.pub, 'sfx-user');
+  fs.rmSync(dst, { recursive: true, force: true });
+  if (!fs.existsSync(src)) return [];
+  ensureDir(dst);
+  const files = fs.readdirSync(src).filter((f) => AUDIO_EXT.includes(path.extname(f).toLowerCase()) && !f.startsWith('.'));
+  for (const f of files) fs.copyFileSync(path.join(src, f), path.join(dst, f));
+  return files;
 };
 
-export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolean } = {}): Promise<Prep> => {
+export const prep = async (p: ReelPaths, s: Settings): Promise<Prep> => {
   ensureDir(p.pub);
   const work = path.join(p.build, 'work');
   ensureDir(work);
@@ -88,51 +90,31 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
   log.step('Images');
   const images = await ingestImages(p);
   if (images.length) log.ok(`${images.length} image(s): ${images.map((i) => i.name).join(', ')}`);
-  else log.warn(`no images found in ${path.relative(process.cwd(), p.images)}/ (or the reel folder)`);
+  else log.warn(`No images found. Put them in ${path.relative(process.cwd(), p.images)}/`);
 
   log.step('Audio');
   const voiceSrc = findAudio(p.dir, 'voice');
-  if (!voiceSrc) throw new Error(`No voice file. Put voice.m4a (or ${AUDIO_EXT.join('/')}) in ${p.dir}`);
+  if (!voiceSrc) throw new Error(`No voice file. Put voice.mp3 (or .m4a / .wav) in ${path.relative(process.cwd(), p.dir)}/`);
   const hookSrc = findAudio(p.dir, 'hook');
   const pieces: Piece[] = [];
   if (hookSrc) pieces.push(await processPiece('hook', hookSrc, work, s));
   pieces.push(await processPiece('voice', voiceSrc, work, s));
   for (const pc of pieces) {
     const cut = pc.originalMs - pc.durationMs;
-    log.ok(`${pc.name}: ${(pc.originalMs / 1000).toFixed(1)}s → ${(pc.durationMs / 1000).toFixed(1)}s (removed ${(cut / 1000).toFixed(1)}s of dead air)`);
+    log.ok(`${path.basename(pc.src)}: ${(pc.originalMs / 1000).toFixed(1)}s, removed ${(cut / 1000).toFixed(1)}s of silence`);
   }
   const master = await masterVoice(pieces, path.join(p.pub, 'voice.wav'), work, s);
-  log.ok(`master voice ${(master.durationMs / 1000).toFixed(1)}s, normalised from ${master.inputLufs.toFixed(1)} to ${s.audio.lufs} LUFS`);
+  log.ok(`voice cleaned and levelled (${(master.durationMs / 1000).toFixed(1)}s)`);
 
-  log.step('Words');
-  const words: PrepWord[] = [];
-  const ownText = hasOwnCaptions(p);
-  if (ownText) log.ok('captions come from your own text (script.md "> …" lines or timeline.json) – no transcription needed');
-  let offset = 0;
-  let usedWhisper = false;
   const placed: PrepPiece[] = [];
+  let offset = 0;
   for (const pc of pieces) {
     placed.push({ name: pc.name, offsetMs: offset, durationMs: pc.durationMs, originalMs: pc.originalMs, cutMap: pc.cutMap });
-    const section = pc.name === 'hook' ? 'hook' : 'body';
-    let raw: RawWord[] | null = ownText ? [] : suppliedWords(p.dir, pc.name);
-    if (ownText) {
-      // timings are worked out from the audio at plan time
-    } else if (raw) {
-      raw = applyCutMap(cleanWords(raw), pc.cutMap);
-      log.ok(`${pc.name}: ${raw.length} words from ${pc.name}.words.json`);
-    } else {
-      if (opts.noWhisper) throw new Error(`No ${pc.name}.words.json and --no-whisper was given`);
-      log.info(`${pc.name}: transcribing with whisper.cpp (${s.whisper.model})…`);
-      raw = cleanWords(await transcribeWords(pc.file16k, path.join(p.build, 'cache'), s.whisper.model));
-      usedWhisper = true;
-      log.ok(`${pc.name}: ${raw.length} words`);
-    }
-    for (const w of raw ?? []) words.push({ ...w, startMs: w.startMs + offset, endMs: w.endMs + offset, section });
     offset += pc.durationMs + (pc.name === 'hook' ? s.audio.hookGapMs : 0);
   }
-  fixTimings(snapToSilences(words, master.silences));
-  const lowConf = words.filter((w) => w.confidence < 0.5);
-  if (lowConf.length) log.warn(`${lowConf.length} low-confidence word(s): ${lowConf.slice(0, 8).map((w) => w.text).join(', ')}`);
+
+  const sfx = copyUserSfx(p);
+  if (sfx.length) log.ok(`your sound effects: ${sfx.join(', ')}`);
 
   let music: Prep['music'] = null;
   const musicSrc = findAudio(p.dir, 'music');
@@ -140,31 +122,21 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
     const dst = path.join(p.pub, `music${path.extname(musicSrc).toLowerCase()}`);
     fs.copyFileSync(musicSrc, dst);
     music = { src: path.basename(dst) };
-    log.ok(`music: ${path.basename(musicSrc)} (ducked under the voice)`);
+    log.ok(`music: ${path.basename(musicSrc)} (quieter while you speak)`);
   }
 
   const result: Prep = {
-    version: 2,
+    version: 3,
     voice: { src: 'voice.wav', durationMs: master.durationMs },
     pieces: placed,
-    ownCaptions: ownText,
-    words,
     silences: master.silences,
     images,
+    sfx,
     music,
-    stats: {
-      inputLufs: master.inputLufs,
-      removedMs: pieces.reduce((a, pc) => a + pc.originalMs - pc.durationMs, 0),
-      whisper: usedWhisper,
-    },
+    audioKey: audioKeyOf(s),
+    stats: { inputLufs: master.inputLufs, removedMs: pieces.reduce((a, pc) => a + pc.originalMs - pc.durationMs, 0) },
   };
   writeJson(p.prep, result);
-
-  if (!fs.existsSync(p.script) && !fs.existsSync(p.userTimeline)) {
-    const last = words[words.length - 1]?.endMs ?? master.durationMs;
-    fs.writeFileSync(p.script, generateScript(words, images.map((i) => i.name), last, (ms) => toOriginal(ms, placed)));
-    log.ok(`wrote script.md – one line per image with its start time; edit the times and re-render`);
-  }
   return result;
 };
 

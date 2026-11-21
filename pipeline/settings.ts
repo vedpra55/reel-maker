@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { settingsSchema, type Settings, type SettingsInput } from '../shared/schema';
-import { PROJECT_CONFIG, type ReelPaths } from './paths';
+import { PROJECT_CONFIG } from './paths';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -31,7 +31,7 @@ export const parseOverride = (kv: string): Obj => {
 
 /**
  * Resolution order (later wins):
- *   schema defaults ← reel.config.json (project) ← reels/<name>/reel.json ← CLI flags
+ *   schema defaults ← reel.config.json (project) ← timeline.json "settings" ← CLI flags
  */
 export const resolveSettings = (reelJson: SettingsInput = {}, overrides: Obj = {}, project: SettingsInput = {}): Settings =>
   settingsSchema.parse(deepMerge(deepMerge(project as Obj, reelJson as Obj), overrides));
@@ -48,8 +48,6 @@ const readJsonFile = (file: string): SettingsInput => {
 /** project-wide defaults for every reel */
 export const loadProjectConfig = (): SettingsInput => readJsonFile(PROJECT_CONFIG);
 
-export const loadSettings = (p: ReelPaths, overrides: Obj = {}): Settings =>
-  resolveSettings(readJsonFile(p.settings), overrides, loadProjectConfig());
-
-/** settings without a reel (used by doctor) */
-export const loadProjectSettings = (): Settings => resolveSettings({}, {}, loadProjectConfig());
+/** reel.config.json ← the "settings" block of the reel's timeline.json ← CLI overrides */
+export const loadSettings = (reelSettings: Obj = {}, overrides: Obj = {}): Settings =>
+  resolveSettings(reelSettings as SettingsInput, overrides, loadProjectConfig());
