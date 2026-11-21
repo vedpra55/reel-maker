@@ -46,41 +46,50 @@ const existing = (name: string) => {
 
 const printPlan = (r: { report: PlanReport }) => {
   const rep = r.report;
-  log.ok(`${rep.shots} image shot(s)${rep.auto ? ' – spread automatically (no image lines given)' : ` from ${rep.input}`}`);
+  log.ok(
+    rep.auto
+      ? `Images: ${rep.shots}, spread evenly (your ${rep.input} has no image times yet)`
+      : `Images: ${rep.shots}, at the times in your ${rep.input}`,
+  );
   log.ok(
     rep.captionSource === 'words'
-      ? 'captions: your word timings'
+      ? 'Captions: your words, at the times you gave'
       : rep.captionSource === 'script'
-        ? 'captions: your text, timed from the audio'
-        : 'captions: transcript',
+        ? `Captions: your own text from ${rep.input}`
+        : 'Captions: from the transcript of your voice',
   );
-  if (rep.unusedImages.length) log.warn(`not used in script.md: ${rep.unusedImages.join(', ')}`);
+  if (rep.unusedImages.length) log.warn(`These images are not used anywhere: ${rep.unusedImages.join(', ')}`);
   for (const w of rep.warnings) log.warn(w);
 };
 
+/** after commands that only prepare, say what to run to get the video */
+const nextStep = (p: ReelPaths) =>
+  console.log(`\n  ${color.bold('Ready.')} To make the video, run:  ${color.cyan(`./reel make ${p.name}`)}\n`);
+
 const doPlan = (p: ReelPaths, o: Common) => {
-  log.step('Planning');
+  log.step('Planning the reel');
   const s = settingsFor(p, o);
   const r = plan(p, s);
   printPlan(r);
-  log.ok(`plan ready: ${(r.timeline.durationMs / 1000).toFixed(1)}s reel`);
+  log.ok(`Reel length: ${(r.timeline.durationMs / 1000).toFixed(1)} seconds`);
   return { s, r };
 };
 
 const doRender = async (p: ReelPaths, o: Common & { draft?: boolean }, planReport: PlanReport | null) => {
-  log.step(o.draft ? 'Rendering draft' : 'Rendering');
+  log.step(o.draft ? 'Making a quick low-res preview video' : 'Making the video (this takes a few minutes)');
   const s = settingsFor(p, o);
   const res = await renderReel(p, s, { draft: o.draft });
   if (o.draft) {
-    log.ok(`${path.relative(process.cwd(), res.out)} in ${res.seconds.toFixed(0)}s`);
+    log.ok(`Preview video: ${path.relative(process.cwd(), res.out)} (made in ${res.seconds.toFixed(0)}s)`);
     return;
   }
   log.step('Finishing');
   const f = await finalize(p, s, res.out, res.timeline);
   writeReport(p, { plan: planReport, timeline: res.timeline, sizeMB: f.sizeMB, renderS: res.seconds, settings: s });
-  log.ok(`${color.bold(path.relative(process.cwd(), f.out))}  ${f.sizeMB.toFixed(1)} MB, rendered in ${res.seconds.toFixed(0)}s`);
-  log.ok(`contact sheet: ${path.relative(process.cwd(), f.sheet)}`);
-  log.ok(`report: ${path.relative(process.cwd(), path.join(p.out, 'report.txt'))}`);
+  log.ok(`Video: ${path.relative(process.cwd(), f.out)} (${f.sizeMB.toFixed(1)} MB, made in ${res.seconds.toFixed(0)}s)`);
+  log.ok(`Overview image (one frame per shot): ${path.relative(process.cwd(), f.sheet)}`);
+  log.ok(`Details: ${path.relative(process.cwd(), path.join(p.out, 'report.txt'))}`);
+  console.log(`\n  ${color.green(color.bold('Done!'))} Your video: ${color.bold(path.relative(process.cwd(), f.out))}\n`);
 };
 
 const program = new Command();
@@ -139,10 +148,13 @@ common(
   const p = existing(name);
   await prep(p, settingsFor(p, o), { noWhisper: o.whisper === false });
   doPlan(p, o);
+  nextStep(p);
 });
 
 common(program.command('plan <name>').description('script.md + settings → timeline.json (instant)')).action((name: string, o) => {
-  doPlan(existing(name), o);
+  const p = existing(name);
+  doPlan(p, o);
+  nextStep(p);
 });
 
 common(

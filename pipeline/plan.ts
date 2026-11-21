@@ -229,7 +229,7 @@ export const readUserTimeline = (p: ReelPaths): { data: unknown; note?: string }
   if (isGeneratedTimeline(data)) {
     fs.mkdirSync(p.build, { recursive: true });
     fs.renameSync(p.userTimeline, path.join(p.build, 'timeline.old.json'));
-    log.warn('moved an old auto-generated timeline.json out of the reel folder (now in .build/timeline.old.json)');
+    log.info('(Tidied up an old file left by the previous version – nothing for you to do.)');
     return null;
   }
   return { data };
