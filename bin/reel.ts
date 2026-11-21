@@ -21,6 +21,7 @@ import { makeExample } from '../pipeline/example';
 import { finalize, writeReport } from '../pipeline/finalize';
 import { ROOT, REELS_DIR, ensureDir, findAudio, readJson, reelImages, reelPaths, writeJson, type ReelPaths } from '../pipeline/paths';
 import { writeActive } from '../pipeline/active';
+import { hasOwnCaptions } from '../pipeline/usertimeline';
 import { plan, type PlanReport } from '../pipeline/plan';
 import { prep } from '../pipeline/prep';
 import { preparePublic, renderReel, renderStills } from '../pipeline/render';
@@ -45,8 +46,14 @@ const existing = (name: string) => {
 
 const printPlan = (r: { report: PlanReport }) => {
   const rep = r.report;
-  log.ok(`${rep.shots} image shot(s)${rep.auto ? ' – spread automatically (script.md has no image lines)' : ' from script.md'}`);
-  log.ok(rep.captionSource === 'script' ? 'captions: your "> …" text, timed from the audio' : 'captions: transcript');
+  log.ok(`${rep.shots} image shot(s)${rep.auto ? ' – spread automatically (no image lines given)' : ` from ${rep.input}`}`);
+  log.ok(
+    rep.captionSource === 'words'
+      ? 'captions: your word timings'
+      : rep.captionSource === 'script'
+        ? 'captions: your text, timed from the audio'
+        : 'captions: transcript',
+  );
   if (rep.unusedImages.length) log.warn(`not used in script.md: ${rep.unusedImages.join(', ')}`);
   for (const w of rep.warnings) log.warn(w);
 };
@@ -56,7 +63,7 @@ const doPlan = (p: ReelPaths, o: Common) => {
   const s = settingsFor(p, o);
   const r = plan(p, s);
   printPlan(r);
-  log.ok(`timeline.json written (${(r.timeline.durationMs / 1000).toFixed(1)}s)`);
+  log.ok(`plan ready: ${(r.timeline.durationMs / 1000).toFixed(1)}s reel`);
   return { s, r };
 };
 
@@ -142,12 +149,10 @@ common(
   program
     .command('render <name>')
     .description('render out/reel.mp4')
-    .option('-d, --draft', 'half resolution, fast encode')
-    .option('--no-plan', 'render timeline.json as-is (keep your hand edits)'),
+    .option('-d, --draft', 'half resolution, fast encode'),
 ).action(async (name: string, o) => {
   const p = existing(name);
-  const r = o.plan === false ? null : doPlan(p, o).r.report;
-  await doRender(p, o, r);
+  await doRender(p, o, doPlan(p, o).r.report);
 });
 
 common(
@@ -215,6 +220,8 @@ program
 /** prep is stale when any input is newer than prep.json */
 const needsPrep = (p: ReelPaths) => {
   if (!fs.existsSync(p.prep)) return true;
+  // prep skipped whisper because you had your own captions, but now you don't
+  if (readJson<{ ownCaptions?: boolean }>(p.prep).ownCaptions && !hasOwnCaptions(p)) return true;
   const t = fs.statSync(p.prep).mtimeMs;
   const inputs = [findAudio(p.dir, 'voice'), findAudio(p.dir, 'hook'), findAudio(p.dir, 'music'), p.images, p.settings]
     .filter((x): x is string => !!x && fs.existsSync(x))

@@ -7,6 +7,7 @@ import { generateScript, parseScript, parseTime } from '../pipeline/script';
 import { resolveSettings } from '../pipeline/settings';
 import { applyCutMap, cleanWords, computeCutMap, mapTime, normaliseWords, unmapTime } from '../pipeline/words';
 import { distribute, speechIn, timeTextBlocks, wordWeight } from '../pipeline/textwords';
+import { isGeneratedTimeline, parseUserTimeline } from '../pipeline/usertimeline';
 
 const S = resolveSettings();
 
@@ -33,6 +34,7 @@ const prepFor = (text: string, images: string[], pieces?: PrepPiece[]): Prep => 
     voice: { src: 'voice.wav', durationMs: dur },
     pieces: pieces ?? identity(dur),
     words,
+    ownCaptions: false,
     silences: [],
     images: images.map((n) => ({ name: n, src: `images/${n}.jpg`, w: 1080, h: 1920 })),
     music: null,
@@ -289,5 +291,55 @@ describe('captions from your own text (> lines)', () => {
     expect(report.captionSource).toBe('script');
     expect(timeline.words.map((w) => w.text)).toEqual(['Pehle', 'jo', 'kicks', 'mehsoos', 'hoti', 'thi']);
     expect(timeline.words[3].startMs).toBe(3000);
+  });
+});
+
+describe('timeline.json as input', () => {
+  it('reads shots with seconds, m:ss strings and ms; options; text', () => {
+    const r = parseUserTimeline({
+      shots: [
+        { time: '0:00', image: '1st', motion: 'zoom-in', focus: 'center', text: 'Last weeks mein' },
+        { time: 7.5, image: 'images/2nd.png', transition: 'crossfade', text: ['Pehle jo', 'kicks'] },
+        { startMs: 10000, image: '3rd', motion: 'sparkle' },
+        { image: 'no-time' },
+        { time: 12, hook: true, image: '4th' },
+      ],
+    });
+    expect(r.lines.map((l) => [l.timeMs, l.image])).toEqual([[0, '1st'], [7500, '2nd.png'], [10000, '3rd'], [12000, '4th']]);
+    expect(r.lines[0]).toMatchObject({ motion: 'zoom-in', focus: 'center', text: 'Last weeks mein' });
+    expect(r.lines[1]).toMatchObject({ transition: 'crossfade', text: 'Pehle jo kicks' });
+    expect(r.lines[3].piece).toBe('hook');
+    expect(r.hasText).toBe(true);
+    expect(r.warnings.some((w) => w.includes('sparkle'))).toBe(true);
+    expect(r.warnings.some((w) => w.includes('no "time"'))).toBe(true);
+  });
+
+  it('accepts a bare array and explicit word timings', () => {
+    const r = parseUserTimeline([{ time: 0, image: 'a' }]);
+    expect(r.lines).toHaveLength(1);
+    const w = parseUserTimeline({ shots: [{ time: 0, image: 'a' }], words: [{ text: 'Hi', start: 0.5, end: 0.8 }, { word: 'there', startMs: 900 }] });
+    expect(w.words).toEqual([
+      { text: 'Hi', startMs: 500, endMs: 800, piece: 'voice' },
+      { text: 'there', startMs: 900, endMs: 1200, piece: 'voice' },
+    ]);
+  });
+
+  it('recognises the old auto-generated file', () => {
+    expect(isGeneratedTimeline({ version: 2, voice: {}, speech: [], shots: [] })).toBe(true);
+    expect(isGeneratedTimeline({ shots: [] })).toBe(false);
+  });
+
+  it('plans from timeline.json: text captions, word captions, voice-clock times', () => {
+    const prep = prepFor(TEXT, ['1st', '2nd', '3rd']);
+    prep.pieces = [{ name: 'voice', offsetMs: 0, durationMs: 9000, originalMs: 10000, cutMap: { keep: [[0, 2000], [3000, 10000]] } }];
+    const s = resolveSettings({ images: { snapToWordMs: 0 } });
+    const a = buildTimeline('t', prep, null, s, { shots: [{ time: 0, image: '1st', text: 'Pehle jo' }, { time: 5, image: '2nd', motion: 'tilt', text: 'kicks thi' }] });
+    expect(a.report.input).toBe('timeline.json');
+    expect(a.report.captionSource).toBe('script');
+    expect(a.timeline.shots[1]).toMatchObject({ startMs: 4000, motion: 'tilt', src: 'images/2nd.jpg' });
+    expect(a.timeline.words.map((w) => w.text)).toEqual(['Pehle', 'jo', 'kicks', 'thi']);
+    const b = buildTimeline('t', prep, null, s, { shots: [{ time: 0, image: '1st' }], words: [{ text: 'Hi', start: 5, end: 5.4 }] });
+    expect(b.report.captionSource).toBe('words');
+    expect(b.timeline.words).toEqual([{ text: 'Hi', startMs: 4000, endMs: 4400 }]);
   });
 });

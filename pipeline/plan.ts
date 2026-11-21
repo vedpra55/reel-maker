@@ -1,13 +1,23 @@
 /** `reel plan`: prep.json + script.md + settings → timeline.json (deterministic, instant, re-runnable). */
 import fs from 'node:fs';
+import path from 'node:path';
 import { timelineSchema, type Settings, type TShot, type TSfx, type TWord, type Timeline } from '../shared/schema';
 import { toFinal, type Prep } from './prep';
 import { readJson, writeJson, type ReelPaths } from './paths';
 import { parseScript, spreadTimes, type ImageLine } from './script';
+import { log } from './util/log';
+import { isGeneratedTimeline, parseUserTimeline, type UserTimeline } from './usertimeline';
 import { timeTextBlocks } from './textwords';
 import { createRng, hashString } from './util/rng';
 
-export type PlanReport = { shots: number; warnings: string[]; unusedImages: string[]; auto: boolean; captionSource: 'script' | 'whisper' };
+export type PlanReport = {
+  shots: number;
+  warnings: string[];
+  unusedImages: string[];
+  auto: boolean;
+  captionSource: 'words' | 'script' | 'whisper';
+  input: 'timeline.json' | 'script.md';
+};
 
 /** where the voice actually starts (end of the leading silence) */
 const firstSpeech = (prep: Prep) => {
@@ -53,15 +63,32 @@ export const buildTimeline = (
   prep: Prep,
   scriptSrc: string | null,
   s: Settings,
+  /** parsed reels/<name>/timeline.json – used instead of script.md when given */
+  userTimeline?: unknown,
 ): { timeline: Timeline; report: PlanReport } => {
   if (prep.version !== 2) throw new Error('This reel was prepared by an older version – run "reel prep <name>" again.');
   const warnings: string[] = [];
-  const parsed = scriptSrc ? parseScript(scriptSrc) : { lines: [], warnings: [], hasText: false };
+  const parsed: UserTimeline =
+    userTimeline !== undefined
+      ? parseUserTimeline(userTimeline)
+      : { ...(scriptSrc ? parseScript(scriptSrc) : { lines: [], warnings: [], hasText: false }), words: null };
   warnings.push(...parsed.warnings);
 
-  // captions: your "> …" text timed from the audio, otherwise the transcript
+  // captions: exact word times you gave > your text timed from the audio > the transcript
   let source: TWord[];
-  if (parsed.hasText) {
+  let captionSource: PlanReport['captionSource'] = 'whisper';
+  if (parsed.words?.length) {
+    captionSource = 'words';
+    source = parsed.words
+      .map((w) => {
+        const a = toFinal(w.piece, w.startMs, prep.pieces);
+        const b = toFinal(w.piece, w.endMs, prep.pieces);
+        return a === null || b === null ? null : { text: w.text, startMs: a, endMs: Math.max(b, a + 40) };
+      })
+      .filter((w): w is TWord => w !== null)
+      .sort((a, b) => a.startMs - b.startMs);
+  } else if (parsed.hasText) {
+    captionSource = 'script';
     const textLines = parsed.lines
       .filter((l) => l.text)
       .map((l) => ({ l, at: toFinal(l.piece, l.timeMs, prep.pieces) }))
@@ -75,7 +102,7 @@ export const buildTimeline = (
     source = timeTextBlocks(blocks, prep.silences);
   } else {
     source = prep.words.map((w) => ({ text: w.text, startMs: w.startMs, endMs: w.endMs }));
-    if (!source.length) warnings.push('no words for captions – add "> …" lines to script.md, or run reel prep with whisper');
+    if (!source.length) warnings.push('no words for captions – add your text ("> …" lines in script.md, or "text" in timeline.json), or run reel prep with whisper');
   }
   const words: TWord[] = applyReplacements(source, s.captions.replace);
   const lastWordEnd = words.length ? words[words.length - 1].endMs : prep.voice.durationMs;
@@ -107,7 +134,7 @@ export const buildTimeline = (
         if (end !== null && line === parsed.lines[parsed.lines.length - 1]) durationMs = Math.max(durationMs, end);
       }
     }
-    if (!cuts.length) throw new Error('script.md has no usable image lines.');
+    if (!cuts.length) throw new Error(`${userTimeline !== undefined ? 'timeline.json' : 'script.md'} has no usable image lines.`);
   }
 
   // order, snap onto word starts, first image from frame 0
@@ -187,14 +214,34 @@ export const buildTimeline = (
     words,
     sfx,
   });
-  return { timeline, report: { shots: shots.length, warnings, unusedImages, auto, captionSource: parsed.hasText ? 'script' : 'whisper' } };
+  return { timeline, report: { shots: shots.length, warnings, unusedImages, auto, captionSource, input: userTimeline !== undefined ? 'timeline.json' : 'script.md' } };
+};
+
+/** reels/<name>/timeline.json if you wrote one (an old auto-generated one there is moved out of the way) */
+export const readUserTimeline = (p: ReelPaths): { data: unknown; note?: string } | null => {
+  if (!fs.existsSync(p.userTimeline)) return null;
+  let data: unknown;
+  try {
+    data = JSON.parse(fs.readFileSync(p.userTimeline, 'utf8'));
+  } catch (e) {
+    throw new Error(`timeline.json is not valid JSON: ${(e as Error).message}`);
+  }
+  if (isGeneratedTimeline(data)) {
+    fs.mkdirSync(p.build, { recursive: true });
+    fs.renameSync(p.userTimeline, path.join(p.build, 'timeline.old.json'));
+    log.warn('moved an old auto-generated timeline.json out of the reel folder (now in .build/timeline.old.json)');
+    return null;
+  }
+  return { data };
 };
 
 export const plan = (p: ReelPaths, s: Settings) => {
   if (!fs.existsSync(p.prep)) throw new Error(`Run "reel prep ${p.name}" first.`);
   const prep = readJson<Prep>(p.prep);
+  const user = readUserTimeline(p);
   const script = fs.existsSync(p.script) ? fs.readFileSync(p.script, 'utf8') : null;
-  const res = buildTimeline(p.name, prep, script, s);
+  const res = user ? buildTimeline(p.name, prep, null, s, user.data) : buildTimeline(p.name, prep, script, s);
+  if (user && script && parseScript(script).lines.length) res.report.warnings.unshift('both timeline.json and script.md found – using timeline.json');
   writeJson(p.timeline, res.timeline);
   return res;
 };

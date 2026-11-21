@@ -8,7 +8,8 @@ import path from 'node:path';
 import type { Settings } from '../shared/schema';
 import { masterVoice, processPiece, type Piece } from './audio';
 import { AUDIO_EXT, ensureDir, findAudio, listImages, readJson, reelImages, writeJson, type ReelPaths } from './paths';
-import { generateScript, scriptHasText } from './script';
+import { hasOwnCaptions } from './usertimeline';
+import { generateScript } from './script';
 import { transcribeWords } from './transcribe';
 import { ffmpeg, probeImageSize, type Silence } from './util/ffmpeg';
 import { which } from './util/exec';
@@ -25,6 +26,8 @@ export type Prep = {
   voice: { src: string; durationMs: number };
   pieces: PrepPiece[];
   words: PrepWord[];
+  /** whisper was skipped because the reel brings its own captions */
+  ownCaptions: boolean;
   silences: Silence[];
   images: { name: string; src: string; w: number; h: number }[];
   music: { src: string } | null;
@@ -103,8 +106,8 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
 
   log.step('Words');
   const words: PrepWord[] = [];
-  const ownText = fs.existsSync(p.script) && scriptHasText(fs.readFileSync(p.script, 'utf8'));
-  if (ownText) log.ok('captions come from your "> …" lines in script.md – no transcription needed');
+  const ownText = hasOwnCaptions(p);
+  if (ownText) log.ok('captions come from your own text (script.md "> …" lines or timeline.json) – no transcription needed');
   let offset = 0;
   let usedWhisper = false;
   const placed: PrepPiece[] = [];
@@ -144,6 +147,7 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
     version: 2,
     voice: { src: 'voice.wav', durationMs: master.durationMs },
     pieces: placed,
+    ownCaptions: ownText,
     words,
     silences: master.silences,
     images,
@@ -156,7 +160,7 @@ export const prep = async (p: ReelPaths, s: Settings, opts: { noWhisper?: boolea
   };
   writeJson(p.prep, result);
 
-  if (!fs.existsSync(p.script)) {
+  if (!fs.existsSync(p.script) && !fs.existsSync(p.userTimeline)) {
     const last = words[words.length - 1]?.endMs ?? master.durationMs;
     fs.writeFileSync(p.script, generateScript(words, images.map((i) => i.name), last, (ms) => toOriginal(ms, placed)));
     log.ok(`wrote script.md – one line per image with its start time; edit the times and re-render`);

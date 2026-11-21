@@ -60,7 +60,7 @@ reel make my-reel             # → reels/my-reel/out/reel.mp4
 | `reel make <name>` | prep (only if inputs changed) + plan + render |
 | `reel render <name> --draft` | half resolution, fast, for checking timing |
 | `reel still <name> 2.5 7` | single frames to `out/stills/`, takes seconds |
-| `reel plan <name>` | re-read script.md (instant; no re-transcribing) |
+| `reel plan <name>` | re-read script.md / timeline.json (instant; no re-transcribing) |
 | `reel preview <name>` | Remotion Studio: play, scrub, try settings live |
 | `reel doctor [--fix]` | check / install ffmpeg, Chrome, whisper.cpp |
 
@@ -127,6 +127,45 @@ Put what you say under each image as `>` lines:
 Lines starting with `#` or `//` are comments.
 **No script.md, or no image lines in it:** `reel prep` writes a draft that spreads your images evenly over the voice,
 landing each one on a sentence start. Edit the times, then run `reel make`.
+
+---
+
+## timeline.json: the same thing as JSON (instead of script.md)
+
+Put `timeline.json` in the reel folder and it is used instead of `script.md`.
+This is handy when another tool, a spreadsheet or later an AI writes the plan for you.
+
+```json
+{
+  "shots": [
+    { "time": "0:00", "image": "1st", "motion": "zoom-in", "focus": "center",
+      "text": "Last weeks mein baby kam move karta hai? Yeh bilkul galat hai." },
+    { "time": 7.5, "image": "2nd", "transition": "crossfade",
+      "text": "Pehle jo kicks mehsoos hoti thi," }
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `time` | When the image appears, in your **original voice file**: seconds (`7.5`) or `"0:07.5"`. `startMs` in milliseconds also works. |
+| `image` | The file name, or a unique start of it. |
+| `motion` `transition` `focus` `treatment` | The same options as in script.md. All are optional. |
+| `text` | What you say during this image. It becomes the captions, timed from the audio, like `>` lines. |
+| `hook` | `true` means `time` is inside `hook.m4a`. |
+| `end` | Optional, last shot only: when the reel ends. |
+
+**Exact word timings (optional).** If you already have them, add a `words` list. It replaces the `text` timing:
+
+```json
+"words": [ { "text": "Last", "start": 0.06, "end": 0.31 }, { "text": "weeks", "start": 0.31, "end": 0.62 } ]
+```
+
+Word times are also in the original voice clock.
+With `text` or `words` present, Whisper isn't needed.
+A plain array of shots (`[ {…}, {…} ]`) is accepted too.
+
+The tool's own processed plan is written to `.build/timeline.json`. Never edit that one; it's rewritten on every run.
 
 ---
 
